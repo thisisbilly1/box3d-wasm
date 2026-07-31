@@ -146,6 +146,30 @@ Every body and shape gets an auto-assigned numeric `userData` tag (you can overw
 
 Wrapper objects returned by embind (`World`, `Body`, `Shape`, joints) are tiny handles. Call `.delete()` when you no longer need the JS handle, and `.destroy()` to remove the underlying object from the simulation. Destroying a world frees every body, shape, and joint inside it.
 
+## The isomorphic surface (`box3d-wasm/iso`)
+
+For projects where the same game source also compiles to a NATIVE binary
+(e.g. [scriptc-game](https://github.com/monteslu/scriptc-game)), the
+`/iso` entry serves the same engine through a shared binding frontend:
+
+```js
+import Box3D from 'box3d-wasm/iso';
+
+const b3 = await Box3D();
+const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
+```
+
+`src/frontend.ts` is the entire API personality, written against a flat
+scalar contract (`src/backend.d.ts`). Here it drives the wasm build; a
+native host vendors the identical file and implements the same contract
+over FFI against Box3D built as a static library at the same pinned SHA.
+One binding source, two worlds.
+
+The iso surface currently covers worlds (step, gravity, explode, worker
+threads), rigid bodies (create/read, velocities, impulses, teleports,
+gravity scale, motion locks) and box/sphere shapes; it grows toward parity
+with the embind API above, which remains the default export.
+
 ## Building from source
 
 Requires [emsdk](https://emscripten.org/docs/getting_started/downloads.html) (tested with 4.0.18), CMake, and Node 22+.
