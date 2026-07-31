@@ -8,7 +8,8 @@
     ".": "./dist/entry.mjs",
     "./standard": "./dist/box3d.mjs",
     "./deluxe": "./dist/box3d.deluxe.mjs",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./iso": "./dist/iso.mjs"
   },
   "files": [
     "dist",
@@ -54,6 +55,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "clang-format": "^1.8.0",
-    "eslint": "^9.39.4"
+    "eslint": "^9.39.4",
+    "typescript": "^5.7.0"
   }
 }
