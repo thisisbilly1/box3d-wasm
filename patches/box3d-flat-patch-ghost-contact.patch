@@ -1,0 +1,19 @@
+diff --git a/src/mesh_contact.c b/src/mesh_contact.c
+index d3144b2..c10128e 100644
+--- a/src/mesh_contact.c
++++ b/src/mesh_contact.c
+@@ -661,6 +661,14 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
+ 			else if ( manifold->feature == b3_featureHullFace )
+ 			{
+ 				float cosNormalAngle = b3Dot( manifold->triangleNormal, manifold->normal );
++				// A smooth, fully welded triangle patch represents a continuous
++				// surface. A divergent hull-face normal is a ghost contact that can
++				// turn vertical penetration recovery into lateral motion. Triangle-
++				// face manifolds for the patch provide the correct surface normal.
++				if ( ( triangle.flags & b3_allFlatEdges ) == b3_allFlatEdges && cosNormalAngle < 0.999f )
++				{
++					continue;
++				}
+ 				if ( cosNormalAngle > 0.5f )
+ 				{
+ 					(void)b3AddEdge( &foundEdges, triangle.i1, triangle.i2 );

@@ -380,6 +380,85 @@ test('height fields collide, support holes, and validate their dimensions', () =
   world.delete();
 });
 
+test('flat height fields reject divergent hull-face ghost contacts', () => {
+  const world = new b3.World({
+    gravity: { x: 0, y: -18, z: 0 },
+    enableSleep: false,
+    maximumLinearSpeed: 2000,
+  });
+  const sampleCount = 65;
+  const terrainSize = 100;
+  const terrain = world.createBody({
+    type: 'static',
+    position: { x: -terrainSize / 2, y: 0, z: -terrainSize / 2 },
+  });
+  terrain.createHeightField({
+    heights: new Float32Array(sampleCount * sampleCount),
+    countX: sampleCount,
+    countZ: sampleCount,
+    scale: {
+      x: terrainSize / (sampleCount - 1),
+      y: 1,
+      z: terrainSize / (sampleCount - 1),
+    },
+    friction: 0.08,
+    frictionCombine: 'min',
+    restitution: 0,
+  });
+
+  const halfAngle = 0.15;
+  const chassis = world.createBody({
+    type: 'dynamic',
+    position: { x: 0, y: 1, z: 0 },
+    rotation: { x: Math.sin(halfAngle), y: 0, z: 0, w: Math.cos(halfAngle) },
+    angularVelocity: { x: 7, y: 4, z: 5 },
+    linearDamping: 0.12,
+    angularDamping: 0.45,
+    enableSleep: false,
+    isBullet: true,
+  });
+  for (let x = -2; x <= 2; x++) {
+    for (let z = -3; z <= 3; z++) {
+      chassis.createBox({
+        halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
+        offset: { x, y: 0, z },
+        density: 1,
+        friction: 0.6,
+        restitution: 0,
+      });
+    }
+  }
+
+  let maximumHorizontalSpeed = 0;
+  for (let step = 0; step < 180; step++) {
+    world.step(DT, SUBSTEPS);
+    if (step === 0) {
+      const terrainContacts = chassis.getContactData().flatMap((contact) => contact.manifolds);
+      assert.ok(terrainContacts.length > 0, 'deeply overlapping chassis should recover against terrain');
+      for (const manifold of terrainContacts) {
+        assert.ok(
+          Math.abs(manifold.normal.y) > 0.999,
+          `flat terrain emitted divergent contact normal ${JSON.stringify(manifold.normal)}`,
+        );
+      }
+    }
+    const velocity = chassis.getLinearVelocity();
+    maximumHorizontalSpeed = Math.max(
+      maximumHorizontalSpeed,
+      Math.hypot(velocity.x, velocity.z),
+    );
+  }
+
+  assert.ok(
+    maximumHorizontalSpeed < 1,
+    `vertical recovery should not launch the chassis horizontally: ${maximumHorizontalSpeed}`,
+  );
+  assert.ok(Math.abs(chassis.getPosition().y - 0.5) < 0.02, 'chassis should recover and settle on terrain');
+
+  world.destroy();
+  world.delete();
+});
+
 test('body exposes world point velocity, world inverse inertia, and touching manifolds', () => {
   const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
   const ground = world.createBody({ type: 'static', position: { x: 0, y: -0.5, z: 0 }, userData: 7 });
