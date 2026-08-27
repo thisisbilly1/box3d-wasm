@@ -236,6 +236,7 @@ export interface Shape extends EmbindHandle {
   setFilter(filter: CollisionFilter): void;
   getAABB(): AABB;
   getClosestPoint(target: Vec3): Vec3;
+  containsPoint(target: Vec3): boolean;
   contactBox(options: BoxContactOptions): ShapeContact | null;
   rayCast(origin: Vec3, translation: Vec3): { hit: false } | { hit: true; point: Vec3; normal: Vec3; fraction: number };
 }

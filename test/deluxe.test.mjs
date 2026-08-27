@@ -95,6 +95,7 @@ test('production collision and query bindings work in a threaded world', () => {
   assert.ok(mesh.isValid());
   const closest = mesh.getClosestPoint({ x: 1, y: 3, z: -1 });
   assert.ok(Math.abs(closest.y) < 1e-5);
+  assert.equal(typeof mesh.containsPoint({ x: 1, y: 3, z: -1 }), 'boolean');
   const meshContact = mesh.contactBox({
     center: { x: 0, y: 0.25, z: 0 },
     halfExtents: { x: 0.5, y: 0.5, z: 0.5 },

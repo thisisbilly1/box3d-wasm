@@ -580,6 +580,91 @@ struct Shape
 		return fromVec3( b3TransformPoint( shapeTransform, closest ) );
 	}
 
+	bool containsPoint( val target ) const
+	{
+		if ( !b3Shape_IsValid( id ) )
+		{
+			return false;
+		}
+
+		b3BodyId bodyId = b3Shape_GetBody( id );
+		b3Transform shapeTransform = {
+			.p = b3Body_GetPosition( bodyId ),
+			.q = b3Body_GetRotation( bodyId ),
+		};
+		b3Vec3 localTarget = b3InvTransformPoint( shapeTransform, toVec3( target, b3Vec3_zero ) );
+		switch ( b3Shape_GetType( id ) )
+		{
+			case b3_sphereShape:
+			{
+				b3Sphere sphere = b3Shape_GetSphere( id );
+				return b3DistanceSquared( localTarget, sphere.center ) <= sphere.radius * sphere.radius;
+			}
+			case b3_capsuleShape:
+			{
+				b3Capsule capsule = b3Shape_GetCapsule( id );
+				b3Vec3 axis = b3Sub( capsule.center2, capsule.center1 );
+				float axisLengthSquared = b3Dot( axis, axis );
+				float fraction =
+					axisLengthSquared > 0.0f
+						? b3ClampFloat( b3Dot( b3Sub( localTarget, capsule.center1 ), axis ) / axisLengthSquared, 0.0f, 1.0f )
+						: 0.0f;
+				b3Vec3 closest = b3MulAdd( capsule.center1, fraction, axis );
+				return b3DistanceSquared( localTarget, closest ) <= capsule.radius * capsule.radius;
+			}
+			case b3_hullShape:
+			{
+				const b3HullData* hull = b3Shape_GetHull( id );
+				const b3Plane* planes = b3GetHullPlanes( hull );
+				for ( int i = 0; i < hull->faceCount; ++i )
+				{
+					if ( b3Dot( planes[i].normal, localTarget ) - planes[i].offset > 1.0e-5f )
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+			case b3_meshShape:
+			{
+				// A triangle mesh is a thin collision surface in Box3D. For the closed,
+				// consistently wound production meshes, the signed solid-angle sum is
+				// +/-4*pi inside and zero outside. This avoids an arbitrary parity ray
+				// passing exactly through a shared edge or vertex.
+				b3Mesh mesh = b3Shape_GetMesh( id );
+				const b3Vec3* vertices = b3GetMeshVertices( mesh.data );
+				const b3MeshTriangle* triangles = b3GetMeshTriangles( mesh.data );
+				double winding = 0.0;
+				for ( int i = 0; i < mesh.data->triangleCount; ++i )
+				{
+					const b3MeshTriangle& triangle = triangles[i];
+					b3Vec3 vertexA = b3Mul( vertices[triangle.index1], mesh.scale );
+					b3Vec3 vertexB = b3Mul( vertices[triangle.index2], mesh.scale );
+					b3Vec3 vertexC = b3Mul( vertices[triangle.index3], mesh.scale );
+					b3Vec3 closest = closestPointOnTriangle( localTarget, vertexA, vertexB, vertexC );
+					if ( b3DistanceSquared( closest, localTarget ) <= 1.0e-10f )
+					{
+						return true;
+					}
+
+					b3Vec3 a = b3Sub( vertexA, localTarget );
+					b3Vec3 b = b3Sub( vertexB, localTarget );
+					b3Vec3 c = b3Sub( vertexC, localTarget );
+					double lengthA = b3Length( a );
+					double lengthB = b3Length( b );
+					double lengthC = b3Length( c );
+					double numerator = b3Dot( a, b3Cross( b, c ) );
+					double denominator =
+						lengthA * lengthB * lengthC + b3Dot( a, b ) * lengthC + b3Dot( b, c ) * lengthA + b3Dot( c, a ) * lengthB;
+					winding += 2.0 * std::atan2( numerator, denominator );
+				}
+				return std::abs( winding ) > 6.283185307179586;
+			}
+			default:
+				return false;
+		}
+	}
+
 	val contactBox( val opts ) const
 	{
 		val none = val::null();
@@ -2624,6 +2709,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setFilter", &Shape::setFilter )
 		.function( "getAABB", &Shape::getAABB )
 		.function( "getClosestPoint", &Shape::getClosestPoint )
+		.function( "containsPoint", &Shape::containsPoint )
 		.function( "contactBox", &Shape::contactBox )
 		.function( "rayCast", &Shape::rayCast );
 

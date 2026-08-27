@@ -46,6 +46,7 @@ async function exerciseDeclarations() {
   const inertia: Matrix3 = body.getWorldInverseRotationalInertia();
   const contacts: ContactData[] = body.getContactData();
   const closest = mesh.getClosestPoint({ x: 0, y: 2, z: 0 });
+  const containsPoint: boolean = mesh.containsPoint({ x: 0, y: 0, z: 0 });
   const boxContact = mesh.contactBox({
     center: { x: 0, y: 0, z: 0 },
     halfExtents: { x: 1, y: 1, z: 1 },
@@ -59,7 +60,7 @@ async function exerciseDeclarations() {
   const standard = await StandardBox3D();
   const deluxe = await DeluxeBox3D();
   const iso = await IsoBox3D();
-  return { boxContact, closest, contacts, deluxe, hits, inertia, iso, standard, velocity };
+  return { boxContact, closest, contacts, containsPoint, deluxe, hits, inertia, iso, standard, velocity };
 }
 
 void exerciseDeclarations;

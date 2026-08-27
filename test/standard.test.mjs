@@ -275,6 +275,8 @@ test('shapes expose closest-point and signed box-contact queries', () => {
   assert.ok(boxContact);
   assert.ok(Math.abs(boxContact.distance + 0.25) < 1e-4, `unexpected hull separation ${boxContact.distance}`);
   assert.ok(boxContact.normal.x > 0.99, `unexpected hull normal ${JSON.stringify(boxContact.normal)}`);
+  assert.equal(box.containsPoint({ x: 0.5, y: 0, z: 0 }), true);
+  assert.equal(box.containsPoint({ x: 1.5, y: 0, z: 0 }), false);
   assert.equal(box.contactBox({
     center: { x: 3, y: 0, z: 0 },
     halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
@@ -297,6 +299,15 @@ test('shapes expose closest-point and signed box-contact queries', () => {
   assert.ok(meshContact);
   assert.ok(Math.abs(meshContact.distance + 0.25) < 1e-4, `unexpected mesh separation ${meshContact.distance}`);
   assert.ok(meshContact.normal.y > 0.99, `unexpected mesh normal ${JSON.stringify(meshContact.normal)}`);
+
+  const volumeBody = world.createBody({ type: 'static', position: { x: 10, y: 2, z: -4 } });
+  const volume = volumeBody.createMesh({
+    vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+    indices: new Uint32Array([0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]),
+    identifyEdges: true,
+  });
+  assert.equal(volume.containsPoint({ x: 10.1, y: 2.1, z: -3.9 }), true);
+  assert.equal(volume.containsPoint({ x: 11, y: 3, z: -3 }), false);
 
   world.destroy();
   world.delete();
