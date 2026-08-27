@@ -1311,6 +1311,12 @@ struct Body
 		b3Body_SetAngularVelocity( id, toVec3( v, b3Vec3_zero ) );
 	}
 
+	void setVelocities( val linearVelocity, val angularVelocity )
+	{
+		b3Body_SetLinearVelocity( id, toVec3( linearVelocity, b3Vec3_zero ) );
+		b3Body_SetAngularVelocity( id, toVec3( angularVelocity, b3Vec3_zero ) );
+	}
+
 	void applyForce( val force, val point, bool wake )
 	{
 		b3Body_ApplyForce( id, toVec3( force, b3Vec3_zero ), toVec3( point, b3Vec3_zero ), wake );
@@ -1733,6 +1739,13 @@ struct ClosestRayCastContext
 	bool hasHit = false;
 };
 
+struct ClosestBodyExcludingRayCastContext
+{
+	uintptr_t excludedBodyTag = 0;
+	RayHit hit = {};
+	bool hasHit = false;
+};
+
 static bool containsTag( const std::vector<uintptr_t>& tags, uintptr_t tag )
 {
 	return std::find( tags.begin(), tags.end(), tag ) != tags.end();
@@ -1792,6 +1805,26 @@ static float collectClosestRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal
 	b3BodyId bodyId = b3Shape_GetBody( shapeId );
 	uintptr_t bodyTag = (uintptr_t)b3Body_GetUserData( bodyId );
 	if ( containsTag( context->excludedBodyTags, bodyTag ) )
+	{
+		return -1.0f;
+	}
+
+	context->hit = { shapeId, point, normal, fraction, userMaterialId, triangleIndex, childIndex };
+	context->hasHit = true;
+	return fraction;
+}
+
+static float collectClosestBodyExcludingRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction,
+												uint64_t userMaterialId, int triangleIndex, int childIndex, void* contextValue )
+{
+	ClosestBodyExcludingRayCastContext* context = static_cast<ClosestBodyExcludingRayCastContext*>( contextValue );
+	if ( fraction == 0.0f )
+	{
+		return -1.0f;
+	}
+
+	b3BodyId bodyId = b3Shape_GetBody( shapeId );
+	if ( (uintptr_t)b3Body_GetUserData( bodyId ) == context->excludedBodyTag )
 	{
 		return -1.0f;
 	}
@@ -2223,6 +2256,27 @@ struct World
 			o.set( "shape", val( shape ) );
 		}
 		return o;
+	}
+
+	val castRayClosestExcludingBody( val origin, val translation, double excludedBodyTag ) const
+	{
+		ClosestBodyExcludingRayCastContext context;
+		context.excludedBodyTag = (uintptr_t)excludedBodyTag;
+		b3World_CastRay( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ), b3DefaultQueryFilter(),
+						 collectClosestBodyExcludingRayHit, &context );
+
+		val out = val::array();
+		if ( context.hasHit )
+		{
+			const RayHit& hit = context.hit;
+			out.set( 0, hit.fraction );
+			out.set( 1, hit.normal.x );
+			out.set( 2, hit.normal.y );
+			out.set( 3, hit.normal.z );
+			out.set( 4, tagOf( b3Shape_GetUserData( hit.shapeId ) ) );
+			out.set( 5, hit.triangleIndex );
+		}
+		return out;
 	}
 
 	val castRay( val origin, val translation, val filterOpts ) const
@@ -2710,6 +2764,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "createParallelJoint", &World::createParallelJoint )
 		.function( "createFilterJoint", &World::createFilterJoint )
 		.function( "castRayClosest", &World::castRayClosest )
+		.function( "castRayClosestExcludingBody", &World::castRayClosestExcludingBody )
 		.function( "castRay", &World::castRay )
 		.function( "explode", &World::explode )
 		.function( "getBodyEvents", &World::getBodyEvents )
@@ -2735,6 +2790,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setLinearVelocity", &Body::setLinearVelocity )
 		.function( "getAngularVelocity", &Body::getAngularVelocity )
 		.function( "setAngularVelocity", &Body::setAngularVelocity )
+		.function( "setVelocities", &Body::setVelocities )
 		.function( "getMotionState", &Body::getMotionState )
 		.function( "applyForce", &Body::applyForce )
 		.function( "applyForceToCenter", &Body::applyForceToCenter )

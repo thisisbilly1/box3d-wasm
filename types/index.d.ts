@@ -270,6 +270,7 @@ export interface Body extends EmbindHandle {
   setLinearVelocity(value: Vec3): void;
   getAngularVelocity(): Vec3;
   setAngularVelocity(value: Vec3): void;
+  setVelocities(linearVelocity: Vec3, angularVelocity: Vec3): void;
   getMotionState(): BodyMotionState;
   applyForce(force: Vec3, worldPoint: Vec3, wake: boolean): void;
   applyForceToCenter(force: Vec3, wake: boolean): void;
@@ -609,6 +610,8 @@ export interface World extends EmbindHandle {
   createParallelJoint(a: Body, b: Body, options?: ParallelJointOptions): ParallelJoint;
   createFilterJoint(a: Body, b: Body, options?: JointFrameOptions): FilterJoint;
   castRayClosest(origin: Vec3, translation: Vec3, filter?: RayFilter): ClosestRayResult;
+  /** Flat closest hit: [fraction, normalX, normalY, normalZ, shapeUserData, triangleIndex]. */
+  castRayClosestExcludingBody(origin: Vec3, translation: Vec3, excludedBodyUserData: number): [] | [number, number, number, number, number, number];
   castRay(origin: Vec3, translation: Vec3, filter?: RayFilter): RayHit[];
   explode(options: ExplosionOptions): void;
   getBodyEvents(): BodyMoveEvent[];

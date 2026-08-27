@@ -181,6 +181,15 @@ test('castRayClosest hits the nearest included shape', () => {
   assert.equal(withoutShapeA.bodyUserData, bodyB.getUserData());
   withoutShapeA.shape.delete();
 
+  const bareWithoutBodyA = world.castRayClosestExcludingBody(
+    { x: -5, y: 0, z: 0 },
+    { x: 20, y: 0, z: 0 },
+    bodyA.getUserData(),
+  );
+  assert.equal(bareWithoutBodyA.length, 6);
+  assert.equal(bareWithoutBodyA[4], shapeB.getUserData());
+  assert.ok(bareWithoutBodyA[0] > result.fraction);
+
   const miss = world.castRayClosest({ x: -5, y: 10, z: 0 }, { x: 20, y: 0, z: 0 }, undefined);
   assert.equal(miss.hit, false);
 
@@ -450,6 +459,9 @@ test('body motion snapshots and impulse batches match individual operations', ()
     assert.ok(Math.abs(state.linearVelocity[axis] - individual.getLinearVelocity()[axis]) < 1e-6);
     assert.ok(Math.abs(state.angularVelocity[axis] - individual.getAngularVelocity()[axis]) < 1e-6);
   }
+  batched.setVelocities({ x: 3, y: 2, z: 1 }, { x: -1, y: -2, z: -3 });
+  assert.deepEqual(batched.getLinearVelocity(), { x: 3, y: 2, z: 1 });
+  assert.deepEqual(batched.getAngularVelocity(), { x: -1, y: -2, z: -3 });
 
   world.destroy();
   world.delete();
