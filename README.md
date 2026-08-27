@@ -209,6 +209,10 @@ npm run build        # builds standard and deluxe flavours into dist/
 npm test
 ```
 
+This maintained fork tracks release-built `dist/` artifacts so consumers can
+pin an immutable Git commit and receive the matching JavaScript and WASM files
+without requiring Emscripten during installation.
+
 ## License
 
 MIT for the wrapper and build scripts, see LICENSE.
