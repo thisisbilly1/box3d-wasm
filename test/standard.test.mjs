@@ -168,6 +168,25 @@ test('castRayClosest hits the nearest shape', () => {
   world.delete();
 });
 
+test('cylinder shape preserves its transform and mass', () => {
+  const world = new b3.World({ gravity: { x: 0, y: 0, z: 0 } });
+  const body = world.createBody({ type: 'dynamic' });
+  const shape = body.createCylinder({
+    height: 2,
+    radius: 0.5,
+    sides: 20,
+    center: { x: 2, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 },
+    density: 1,
+  });
+  assert.ok(shape.isValid());
+  assert.ok(shape.computeMassData().mass > 1.4);
+  const aabb = shape.getAABB();
+  assert.ok(aabb.lowerBound.x < 1.1 && aabb.upperBound.x > 2.9);
+  world.destroy();
+  world.delete();
+});
+
 test('castRay collects sorted hits and filters body or shape userData', () => {
   const world = new b3.World({ gravity: { x: 0, y: 0, z: 0 } });
   const bodyA = world.createBody({ type: 'static', position: { x: 0, y: 0, z: 0 }, userData: 101 });

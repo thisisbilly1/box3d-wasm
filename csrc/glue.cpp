@@ -1309,6 +1309,33 @@ struct Body
 		return shape;
 	}
 
+	Shape createCylinder( val opts )
+	{
+		b3ShapeDef def = shapeDefFromOpts( opts );
+		float height = std::max( getFloat( opts, "height", 1.0f ), 0.001f );
+		float radius = std::max( getFloat( opts, "radius", 0.5f ), 0.001f );
+		int sides = std::clamp( getInt( opts, "sides", 16 ), 3, 32 );
+		b3HullData* hull = b3CreateCylinder( height, radius, -0.5f * height, sides );
+		if ( hull == nullptr )
+		{
+			return { b3_nullShapeId, owner };
+		}
+
+		if ( hasKey( opts, "rotation" ) || hasKey( opts, "center" ) )
+		{
+			b3Transform xf;
+			xf.p = getVec3( opts, "center", b3Vec3_zero );
+			xf.q = getQuat( opts, "rotation", b3Quat_identity );
+			b3HullData* transformed = b3CloneAndTransformHull( hull, xf, { 1.0f, 1.0f, 1.0f } );
+			b3DestroyHull( hull );
+			hull = transformed;
+		}
+
+		Shape shape = { b3CreateHullShape( id, &def, hull ), owner };
+		b3DestroyHull( hull );
+		return shape;
+	}
+
 	Shape createHull( val opts )
 	{
 		b3ShapeDef def = shapeDefFromOpts( opts );
@@ -2377,6 +2404,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "createSphere", &Body::createSphere )
 		.function( "createCapsule", &Body::createCapsule )
 		.function( "createBox", &Body::createBox )
+		.function( "createCylinder", &Body::createCylinder )
 		.function( "createHull", &Body::createHull )
 		.function( "createMesh", &Body::createMesh )
 		.function( "createHeightField", &Body::createHeightField );

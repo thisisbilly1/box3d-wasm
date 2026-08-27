@@ -105,6 +105,8 @@ test('production collision and query bindings work in a threaded world', () => {
   const body = world.createBody({ type: 'dynamic', position: { x: 0, y: 3, z: 0 }, userData: 20 });
   const sphere = body.createSphere({ radius: 0.5, density: 1, frictionCombine: 'average' });
   assert.ok(sphere.computeMassData().mass > 0);
+  const cylinder = body.createCylinder({ height: 1, radius: 0.25, density: 1 });
+  assert.ok(cylinder.computeMassData().mass > 0);
   for (let index = 0; index < 180; index++) world.step(DT, SUBSTEPS);
 
   assert.ok(body.getContactData().length > 0);

@@ -75,6 +75,14 @@ export interface BoxOptions extends ShapeOptions {
   rotation?: Quat;
 }
 
+export interface CylinderOptions extends ShapeOptions {
+  height?: number;
+  radius?: number;
+  sides?: number;
+  center?: Vec3;
+  rotation?: Quat;
+}
+
 export interface HullOptions extends ShapeOptions {
   points: readonly Vec3[];
   maxVertices?: number;
@@ -272,6 +280,7 @@ export interface Body extends EmbindHandle {
   createSphere(options?: SphereOptions): Shape;
   createCapsule(options?: CapsuleOptions): Shape;
   createBox(options?: BoxOptions): Shape;
+  createCylinder(options?: CylinderOptions): Shape;
   createHull(options: HullOptions): Shape;
   createMesh(options: MeshOptions): Shape;
   createHeightField(options: HeightFieldOptions): Shape;

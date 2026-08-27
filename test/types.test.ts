@@ -35,6 +35,13 @@ async function exerciseDeclarations() {
   void massData.mass;
   void massData.center.x;
   void massData.inertia.cx.x;
+  body.createCylinder({
+    height: 2,
+    radius: 0.5,
+    sides: 16,
+    center: { x: 1, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0, w: 1 },
+  });
   const velocity: Vec3 = body.getWorldPointVelocity({ x: 1, y: 0, z: 0 });
   const inertia: Matrix3 = body.getWorldInverseRotationalInertia();
   const contacts: ContactData[] = body.getContactData();
