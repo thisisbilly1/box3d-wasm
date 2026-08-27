@@ -2181,6 +2181,9 @@ struct World
 			o.set( "fraction", hit.fraction );
 			o.set( "shapeUserData", tagOf( b3Shape_GetUserData( hit.shapeId ) ) );
 			o.set( "bodyUserData", tagOf( b3Body_GetUserData( b3Shape_GetBody( hit.shapeId ) ) ) );
+			o.set( "userMaterialId", (double)unpackMaterialId( hit.userMaterialId ) );
+			o.set( "triangleIndex", hit.triangleIndex );
+			o.set( "childIndex", hit.childIndex );
 			Shape shape = { hit.shapeId, const_cast<World*>( this ) };
 			o.set( "shape", val( shape ) );
 		}

@@ -56,11 +56,20 @@ async function exerciseDeclarations() {
     { x: 0, y: -20, z: 0 },
     { excludeBodyUserData: [2], maxHits: 1 },
   );
+  const closestRay = world.castRayClosest(
+    { x: 0, y: 10, z: 0 },
+    { x: 0, y: -20, z: 0 },
+    { excludeBodyUserData: [2] },
+  );
+  if (closestRay.hit) {
+    const closestRayHit: RayHit = closestRay;
+    void closestRayHit.triangleIndex;
+  }
 
   const standard = await StandardBox3D();
   const deluxe = await DeluxeBox3D();
   const iso = await IsoBox3D();
-  return { boxContact, closest, contacts, containsPoint, deluxe, hits, inertia, iso, standard, velocity };
+  return { boxContact, closest, closestRay, contacts, containsPoint, deluxe, hits, inertia, iso, standard, velocity };
 }
 
 void exerciseDeclarations;

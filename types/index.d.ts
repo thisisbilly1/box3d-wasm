@@ -184,7 +184,7 @@ export interface RayHit {
   shape: Shape;
 }
 
-export type ClosestRayResult = { hit: false } | ({ hit: true } & Omit<RayHit, 'userMaterialId' | 'triangleIndex' | 'childIndex'>);
+export type ClosestRayResult = { hit: false } | ({ hit: true } & RayHit);
 
 export interface RayFilter {
   categoryBits?: number;

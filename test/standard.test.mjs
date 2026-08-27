@@ -158,6 +158,8 @@ test('castRayClosest hits the nearest included shape', () => {
   assert.ok(Math.abs(result.point.x + 1) < 1e-3, `nearest surface at x=-1, got ${result.point.x}`);
   assert.equal(result.shapeUserData, shapeA.getUserData());
   assert.equal(result.bodyUserData, bodyA.getUserData());
+  assert.equal(Number.isInteger(result.triangleIndex), true);
+  assert.equal(Number.isInteger(result.childIndex), true);
   assert.ok(result.shape.isValid());
   result.shape.delete();
 
