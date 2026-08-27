@@ -87,6 +87,10 @@ for FLAVOUR in $FLAVOURS; do
     -sEXPORT_ES6=1
     -sEXPORT_NAME=Box3D
     -sENVIRONMENT=web,worker,node
+    # Keep the browser build compatible with a strict CSP. Embind otherwise
+    # generates call wrappers with `new Function` at module initialization.
+    -sDYNAMIC_EXECUTION=0
+    -sEMBIND_AOT=1
     -sALLOW_MEMORY_GROWTH=1
     -sALLOW_TABLE_GROWTH=1
     -sFILESYSTEM=0
