@@ -1292,6 +1292,20 @@ struct Body
 		return fromVec3( b3Body_GetAngularVelocity( id ) );
 	}
 
+	val getMotionState() const
+	{
+		val state = val::object();
+		state.set( "position", fromVec3( b3Body_GetPosition( id ) ) );
+		state.set( "rotation", fromQuat( b3Body_GetRotation( id ) ) );
+		state.set( "linearVelocity", fromVec3( b3Body_GetLinearVelocity( id ) ) );
+		state.set( "angularVelocity", fromVec3( b3Body_GetAngularVelocity( id ) ) );
+		state.set( "worldCenterOfMass", fromVec3( b3Body_GetWorldCenterOfMass( id ) ) );
+		state.set( "worldInverseRotationalInertia", fromMatrix3( b3Body_GetWorldInverseRotationalInertia( id ) ) );
+		state.set( "inverseMass", b3Body_GetInverseMass( id ) );
+		state.set( "gravityScale", b3Body_GetGravityScale( id ) );
+		return state;
+	}
+
 	void setAngularVelocity( val v )
 	{
 		b3Body_SetAngularVelocity( id, toVec3( v, b3Vec3_zero ) );
@@ -1325,6 +1339,27 @@ struct Body
 	void applyAngularImpulse( val impulse, bool wake )
 	{
 		b3Body_ApplyAngularImpulse( id, toVec3( impulse, b3Vec3_zero ), wake );
+	}
+
+	void applyImpulseBatch( val pointImpulses, val angularImpulses, bool wake )
+	{
+		int pointValueCount = pointImpulses["length"].as<int>();
+		for ( int valueIndex = 0; valueIndex + 5 < pointValueCount; valueIndex += 6 )
+		{
+			b3Vec3 impulse = { pointImpulses[valueIndex].as<float>(), pointImpulses[valueIndex + 1].as<float>(),
+							   pointImpulses[valueIndex + 2].as<float>() };
+			b3Vec3 point = { pointImpulses[valueIndex + 3].as<float>(), pointImpulses[valueIndex + 4].as<float>(),
+							 pointImpulses[valueIndex + 5].as<float>() };
+			b3Body_ApplyLinearImpulse( id, impulse, point, wake );
+		}
+
+		int angularValueCount = angularImpulses["length"].as<int>();
+		for ( int valueIndex = 0; valueIndex + 2 < angularValueCount; valueIndex += 3 )
+		{
+			b3Vec3 impulse = { angularImpulses[valueIndex].as<float>(), angularImpulses[valueIndex + 1].as<float>(),
+							   angularImpulses[valueIndex + 2].as<float>() };
+			b3Body_ApplyAngularImpulse( id, impulse, wake );
+		}
 	}
 
 	float getMass() const
@@ -2700,12 +2735,14 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setLinearVelocity", &Body::setLinearVelocity )
 		.function( "getAngularVelocity", &Body::getAngularVelocity )
 		.function( "setAngularVelocity", &Body::setAngularVelocity )
+		.function( "getMotionState", &Body::getMotionState )
 		.function( "applyForce", &Body::applyForce )
 		.function( "applyForceToCenter", &Body::applyForceToCenter )
 		.function( "applyTorque", &Body::applyTorque )
 		.function( "applyLinearImpulse", &Body::applyLinearImpulse )
 		.function( "applyLinearImpulseToCenter", &Body::applyLinearImpulseToCenter )
 		.function( "applyAngularImpulse", &Body::applyAngularImpulse )
+		.function( "applyImpulseBatch", &Body::applyImpulseBatch )
 		.function( "getMass", &Body::getMass )
 		.function( "applyMassFromShapes", &Body::applyMassFromShapes )
 		.function( "getLocalCenterOfMass", &Body::getLocalCenterOfMass )

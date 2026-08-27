@@ -172,6 +172,17 @@ export interface ContactData {
   manifolds: ContactManifold[];
 }
 
+export interface BodyMotionState {
+  position: Vec3;
+  rotation: Quat;
+  linearVelocity: Vec3;
+  angularVelocity: Vec3;
+  worldCenterOfMass: Vec3;
+  worldInverseRotationalInertia: Matrix3;
+  inverseMass: number;
+  gravityScale: number;
+}
+
 export interface RayHit {
   point: Vec3;
   normal: Vec3;
@@ -259,12 +270,15 @@ export interface Body extends EmbindHandle {
   setLinearVelocity(value: Vec3): void;
   getAngularVelocity(): Vec3;
   setAngularVelocity(value: Vec3): void;
+  getMotionState(): BodyMotionState;
   applyForce(force: Vec3, worldPoint: Vec3, wake: boolean): void;
   applyForceToCenter(force: Vec3, wake: boolean): void;
   applyTorque(torque: Vec3, wake: boolean): void;
   applyLinearImpulse(impulse: Vec3, worldPoint: Vec3, wake: boolean): void;
   applyLinearImpulseToCenter(impulse: Vec3, wake: boolean): void;
   applyAngularImpulse(impulse: Vec3, wake: boolean): void;
+  /** Point impulses use [ix, iy, iz, px, py, pz] strides; angular impulses use [x, y, z]. */
+  applyImpulseBatch(pointImpulses: readonly number[], angularImpulses: readonly number[], wake: boolean): void;
   getMass(): number;
   applyMassFromShapes(): void;
   getLocalCenterOfMass(): Vec3;

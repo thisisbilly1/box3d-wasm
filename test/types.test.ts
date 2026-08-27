@@ -1,4 +1,5 @@
 import Box3D, {
+  type BodyMotionState,
   type ContactData,
   type HeightFieldOptions,
   type Matrix3,
@@ -43,6 +44,8 @@ async function exerciseDeclarations() {
     rotation: { x: 0, y: 0, z: 0, w: 1 },
   });
   const velocity: Vec3 = body.getWorldPointVelocity({ x: 1, y: 0, z: 0 });
+  const motionState: BodyMotionState = body.getMotionState();
+  body.applyImpulseBatch([1, 0, 0, 1, 0, 0], [0, 1, 0], true);
   const inertia: Matrix3 = body.getWorldInverseRotationalInertia();
   const contacts: ContactData[] = body.getContactData();
   const closest = mesh.getClosestPoint({ x: 0, y: 2, z: 0 });
@@ -69,7 +72,7 @@ async function exerciseDeclarations() {
   const standard = await StandardBox3D();
   const deluxe = await DeluxeBox3D();
   const iso = await IsoBox3D();
-  return { boxContact, closest, closestRay, contacts, containsPoint, deluxe, hits, inertia, iso, standard, velocity };
+  return { boxContact, closest, closestRay, contacts, containsPoint, deluxe, hits, inertia, iso, motionState, standard, velocity };
 }
 
 void exerciseDeclarations;

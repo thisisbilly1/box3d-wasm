@@ -406,6 +406,55 @@ test('body exposes world point velocity, world inverse inertia, and touching man
   world.delete();
 });
 
+test('body motion snapshots and impulse batches match individual operations', () => {
+  const world = new b3.World({ gravity: { x: 0, y: -7, z: 0 } });
+  const createBody = (x) => {
+    const body = world.createBody({ type: 'dynamic', position: { x, y: 2, z: 0 }, gravityScale: 0.75 });
+    body.createBox({ halfExtents: { x: 0.5, y: 0.75, z: 1 }, density: 2 });
+    return body;
+  };
+  const individual = createBody(-5);
+  const batched = createBody(5);
+  const individualCenter = individual.getWorldCenterOfMass();
+  const batchedCenter = batched.getWorldCenterOfMass();
+  const pointImpulses = [
+    2, 1, -0.5, batchedCenter.x + 0.5, batchedCenter.y, batchedCenter.z,
+    -0.25, 0.5, 1.5, batchedCenter.x, batchedCenter.y + 0.25, batchedCenter.z - 0.5,
+  ];
+  const angularImpulses = [0.2, -0.1, 0.4, -0.05, 0.3, 0.1];
+
+  individual.applyLinearImpulse(
+    { x: 2, y: 1, z: -0.5 },
+    { x: individualCenter.x + 0.5, y: individualCenter.y, z: individualCenter.z },
+    true,
+  );
+  individual.applyLinearImpulse(
+    { x: -0.25, y: 0.5, z: 1.5 },
+    { x: individualCenter.x, y: individualCenter.y + 0.25, z: individualCenter.z - 0.5 },
+    true,
+  );
+  individual.applyAngularImpulse({ x: 0.2, y: -0.1, z: 0.4 }, true);
+  individual.applyAngularImpulse({ x: -0.05, y: 0.3, z: 0.1 }, true);
+  batched.applyImpulseBatch(pointImpulses, angularImpulses, true);
+
+  const state = batched.getMotionState();
+  assert.deepEqual(state.position, batched.getPosition());
+  assert.deepEqual(state.rotation, batched.getRotation());
+  assert.deepEqual(state.linearVelocity, batched.getLinearVelocity());
+  assert.deepEqual(state.angularVelocity, batched.getAngularVelocity());
+  assert.deepEqual(state.worldCenterOfMass, batchedCenter);
+  assert.deepEqual(state.worldInverseRotationalInertia, batched.getWorldInverseRotationalInertia());
+  assert.ok(Math.abs(state.inverseMass - (1 / batched.getMass())) < 1e-6);
+  assert.equal(state.gravityScale, 0.75);
+  for (const axis of ['x', 'y', 'z']) {
+    assert.ok(Math.abs(state.linearVelocity[axis] - individual.getLinearVelocity()[axis]) < 1e-6);
+    assert.ok(Math.abs(state.angularVelocity[axis] - individual.getAngularVelocity()[axis]) < 1e-6);
+  }
+
+  world.destroy();
+  world.delete();
+});
+
 test('native material callbacks apply Rapier-style combine precedence', () => {
   function reboundHeight(restitutionCombine) {
     const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
