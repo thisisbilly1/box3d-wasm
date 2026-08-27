@@ -82,3 +82,43 @@ test('single worker and multi worker runs agree', () => {
     assert.ok(d < 0.01, `body ${i} diverged by ${d} between 1 and 4 workers`);
   }
 });
+
+test('production collision and query bindings work in a threaded world', () => {
+  const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 }, workerCount: 4 });
+  const terrain = world.createBody({ type: 'static', userData: 10 });
+  const mesh = terrain.createMesh({
+    vertices: new Float32Array([-5, 0, -5, -5, 0, 5, 5, 0, 5, 5, 0, -5]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    friction: 0.8,
+    frictionCombine: 'min',
+  });
+  assert.ok(mesh.isValid());
+
+  const heightTerrain = world.createBody({ type: 'static', position: { x: 10, y: 0, z: 0 } });
+  const heightField = heightTerrain.createHeightField({
+    heights: new Float32Array([0, 0, 0, 0]),
+    countX: 2,
+    countZ: 2,
+  });
+  assert.ok(heightField.isValid());
+
+  const body = world.createBody({ type: 'dynamic', position: { x: 0, y: 3, z: 0 }, userData: 20 });
+  body.createSphere({ radius: 0.5, density: 1, frictionCombine: 'average' });
+  for (let index = 0; index < 180; index++) world.step(DT, SUBSTEPS);
+
+  assert.ok(body.getContactData().length > 0);
+  assert.ok(body.getWorldInverseRotationalInertia().cx.x > 0);
+  assert.equal(typeof body.getWorldPointVelocity({ x: 0, y: 1, z: 0 }).x, 'number');
+
+  const hits = world.castRay(
+    { x: 0, y: 2, z: 0 },
+    { x: 0, y: -4, z: 0 },
+    { excludeBodyUserData: [20], maxHits: 1 },
+  );
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].bodyUserData, 10);
+  hits[0].shape.delete();
+
+  world.destroy();
+  world.delete();
+});

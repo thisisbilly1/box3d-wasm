@@ -161,6 +161,177 @@ test('castRayClosest hits the nearest shape', () => {
   world.delete();
 });
 
+test('castRay collects sorted hits and filters body or shape userData', () => {
+  const world = new b3.World({ gravity: { x: 0, y: 0, z: 0 } });
+  const bodyA = world.createBody({ type: 'static', position: { x: 0, y: 0, z: 0 }, userData: 101 });
+  const shapeA = bodyA.createSphere({ radius: 1, userData: 1001, userMaterialId: 11 });
+  const bodyB = world.createBody({ type: 'static', position: { x: 5, y: 0, z: 0 }, userData: 202 });
+  bodyB.createSphere({ radius: 1, userData: 2002, userMaterialId: 22 });
+
+  const allHits = world.castRay({ x: -5, y: 0, z: 0 }, { x: 15, y: 0, z: 0 }, undefined);
+  assert.equal(allHits.length, 2);
+  assert.ok(allHits[0].fraction < allHits[1].fraction);
+  assert.equal(allHits[0].bodyUserData, 101);
+  assert.equal(allHits[0].userMaterialId, 11);
+
+  const withoutBodyA = world.castRay(
+    { x: -5, y: 0, z: 0 },
+    { x: 15, y: 0, z: 0 },
+    { excludeBodyUserData: [101], maxHits: 1 },
+  );
+  assert.equal(withoutBodyA.length, 1);
+  assert.equal(withoutBodyA[0].bodyUserData, 202);
+
+  const withoutShapeA = world.castRay(
+    { x: -5, y: 0, z: 0 },
+    { x: 15, y: 0, z: 0 },
+    { excludeShapeUserData: [shapeA.getUserData()] },
+  );
+  assert.equal(withoutShapeA.length, 1);
+  assert.equal(withoutShapeA[0].shapeUserData, 2002);
+
+  for (const hit of [...allHits, ...withoutBodyA, ...withoutShapeA]) {
+    hit.shape.delete();
+  }
+  world.destroy();
+  world.delete();
+});
+
+test('triangle meshes collide and release resources with their shape or body', () => {
+  const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
+  const ground = world.createBody({ type: 'static' });
+  const meshOptions = {
+    vertices: new Float32Array([-5, 0, -5, -5, 0, 5, 5, 0, 5, 5, 0, -5]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    identifyEdges: true,
+    friction: 0.8,
+  };
+  const mesh = ground.createMesh(meshOptions);
+  assert.ok(mesh.isValid());
+  assert.equal(mesh.getType(), 'mesh');
+
+  const ball = world.createBody({ type: 'dynamic', position: { x: 0, y: 3, z: 0 } });
+  ball.createSphere({ radius: 0.5, density: 1 });
+  stepSeconds(world, 3);
+  assert.ok(Math.abs(ball.getPosition().y - 0.5) < 0.03);
+
+  mesh.destroy(false);
+  assert.equal(mesh.isValid(), false);
+  mesh.delete();
+
+  const replacement = ground.createMesh(meshOptions);
+  assert.ok(replacement.isValid());
+  ground.destroy();
+  assert.equal(replacement.isValid(), false);
+  replacement.delete();
+
+  const invalidBody = world.createBody({ type: 'static' });
+  const invalid = invalidBody.createMesh({
+    vertices: [0, 0, 0, 1, 0, 0, 0, 0, 1],
+    indices: [0, 1, 9],
+  });
+  assert.equal(invalid.isValid(), false);
+  invalid.delete();
+
+  world.destroy();
+  world.delete();
+});
+
+test('height fields collide, support holes, and validate their dimensions', () => {
+  const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
+  const terrain = world.createBody({ type: 'static' });
+  const heightField = terrain.createHeightField({
+    heights: new Float32Array([0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    countX: 3,
+    countZ: 3,
+    scale: { x: 1, y: 1, z: 1 },
+    materialIndices: new Uint8Array([255, 0, 0, 0]),
+    friction: 0.8,
+  });
+  assert.ok(heightField.isValid());
+  assert.equal(heightField.getType(), 'heightField');
+
+  const box = world.createBody({ type: 'dynamic', position: { x: 1.5, y: 3, z: 1.5 } });
+  box.createBox({ halfExtents: { x: 0.25, y: 0.25, z: 0.25 }, density: 1 });
+  stepSeconds(world, 3);
+  assert.ok(Math.abs(box.getPosition().y - 0.25) < 0.03);
+
+  const invalid = terrain.createHeightField({ heights: [0, 0, 0], countX: 2, countZ: 2 });
+  assert.equal(invalid.isValid(), false);
+  invalid.delete();
+
+  world.destroy();
+  world.delete();
+});
+
+test('body exposes world point velocity, world inverse inertia, and touching manifolds', () => {
+  const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
+  const ground = world.createBody({ type: 'static', position: { x: 0, y: -0.5, z: 0 }, userData: 7 });
+  ground.createBox({ halfExtents: { x: 5, y: 0.5, z: 5 }, userData: 70 });
+
+  const box = world.createBody({
+    type: 'dynamic',
+    position: { x: 0, y: 2, z: 0 },
+    linearVelocity: { x: 3, y: 0, z: 0 },
+    angularVelocity: { x: 0, y: 0, z: 2 },
+    userData: 8,
+  });
+  box.createBox({ halfExtents: { x: 0.5, y: 0.5, z: 0.5 }, density: 1, userData: 80 });
+
+  const pointVelocity = box.getWorldPointVelocity({ x: 0, y: 3, z: 0 });
+  assert.ok(Math.abs(pointVelocity.x - 1) < 1e-5);
+  assert.ok(Math.abs(pointVelocity.y) < 1e-5);
+
+  const inertia = box.getWorldInverseRotationalInertia();
+  assert.ok(inertia.cx.x > 0);
+  assert.ok(inertia.cy.y > 0);
+  assert.ok(inertia.cz.z > 0);
+
+  box.setLinearVelocity({ x: 0, y: 0, z: 0 });
+  box.setAngularVelocity({ x: 0, y: 0, z: 0 });
+  stepSeconds(world, 3);
+  const contacts = box.getContactData();
+  assert.ok(contacts.length >= 1);
+  const groundContact = contacts.find((contact) =>
+    [contact.shapeUserDataA, contact.shapeUserDataB].includes(70),
+  );
+  assert.ok(groundContact);
+  assert.ok(groundContact.manifolds.length >= 1);
+  assert.ok(Math.abs(groundContact.manifolds[0].normal.y) > 0.9);
+  assert.ok(groundContact.manifolds[0].points.length >= 1);
+
+  world.destroy();
+  world.delete();
+});
+
+test('native material callbacks apply Rapier-style combine precedence', () => {
+  function reboundHeight(restitutionCombine) {
+    const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
+    world.setMaterialCallbacks();
+    const ground = world.createBody({ type: 'static', position: { x: 0, y: -0.5, z: 0 } });
+    ground.createBox({ halfExtents: { x: 5, y: 0.5, z: 5 }, restitution: 0 });
+    const ball = world.createBody({ type: 'dynamic', position: { x: 0, y: 3, z: 0 } });
+    ball.createSphere({ radius: 0.5, density: 1, restitution: 1, restitutionCombine });
+
+    let touched = false;
+    let peak = 0;
+    for (let index = 0; index < 240; index++) {
+      world.step(DT, SUBSTEPS);
+      const y = ball.getPosition().y;
+      touched ||= y < 0.55;
+      if (touched) peak = Math.max(peak, y);
+    }
+    world.destroy();
+    world.delete();
+    return peak;
+  }
+
+  const defaultPeak = reboundHeight(undefined);
+  const minPeak = reboundHeight('min');
+  assert.ok(defaultPeak > 2, `default max restitution should bounce, peaked at ${defaultPeak}`);
+  assert.ok(minPeak < 0.7, `min restitution should suppress the bounce, peaked at ${minPeak}`);
+});
+
 test('body move events report motion and sleep', () => {
   const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
 

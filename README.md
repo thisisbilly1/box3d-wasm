@@ -87,6 +87,10 @@ world.step(1 / 60, 4);          // timeStep, subStepCount
 world.setGravity({ x: 0, y: -3.7, z: 0 });
 world.getAwakeBodyCount();
 world.castRayClosest(origin, translation, filter);
+world.castRay(origin, translation, {
+  excludeBodyUserData: [bodyTag],
+  maxHits: 4,
+});
 world.explode({ position, radius: 3, falloff: 2, impulsePerArea: 10 });
 world.getBodyEvents();          // [{ userData, position, rotation, fellAsleep }]
 world.getContactEvents();       // { begin: [...], end: [...], hit: [...] }
@@ -110,6 +114,9 @@ body.getPosition(); body.getRotation(); body.getTransform();
 body.setLinearVelocity(v); body.applyLinearImpulseToCenter(v, true);
 body.applyForce(force, worldPoint, true); body.applyTorque(t, true);
 body.getMass(); body.isAwake(); body.setAwake(true);
+body.getWorldPointVelocity(worldPoint);
+body.getWorldInverseRotationalInertia();
+body.getContactData();              // touching contacts and manifolds
 body.destroy();
 ```
 
@@ -122,7 +129,28 @@ body.createBox({ halfExtents: { x: 1, y: 0.5, z: 2 }, friction: 0.7 });
 body.createSphere({ radius: 0.5, restitution: 0.8 });
 body.createCapsule({ height: 1.2, radius: 0.3 });
 body.createHull({ points: [{ x, y, z }, ...] });
+body.createMesh({
+  vertices: new Float32Array([...]),
+  indices: new Uint32Array([...]),
+  identifyEdges: true,
+});
+body.createHeightField({
+  heights: new Float32Array([...]),
+  countX,
+  countZ,
+  scale: { x: 1, y: 1, z: 1 },
+});
 ```
+
+Mesh and height-field shapes are static-only. Their immutable native geometry
+remains alive until the shape, its body, or its world is destroyed. Height-field
+`materialIndices` may use `255` for holes. Invalid dimensions or indices return
+an invalid shape (`shape.isValid() === false`) without entering Box3D.
+
+Set `frictionCombine` or `restitutionCombine` on a shape/material to use
+`average`, `min`, `multiply`, or `max` mixing. The rule with the greater Rapier-style
+precedence wins. Mixing stays entirely native and is safe in threaded worlds;
+JavaScript is never called from a solver worker.
 
 ### Joints
 
