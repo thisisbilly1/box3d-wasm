@@ -1690,6 +1690,14 @@ struct RayCastContext
 	std::vector<RayHit> hits;
 };
 
+struct ClosestRayCastContext
+{
+	std::vector<uintptr_t> excludedShapeTags;
+	std::vector<uintptr_t> excludedBodyTags;
+	RayHit hit = {};
+	bool hasHit = false;
+};
+
 static bool containsTag( const std::vector<uintptr_t>& tags, uintptr_t tag )
 {
 	return std::find( tags.begin(), tags.end(), tag ) != tags.end();
@@ -1729,6 +1737,33 @@ static float collectRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float
 
 	context->hits.push_back( { shapeId, point, normal, fraction, userMaterialId, triangleIndex, childIndex } );
 	return 1.0f;
+}
+
+static float collectClosestRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId,
+								   int triangleIndex, int childIndex, void* contextValue )
+{
+	ClosestRayCastContext* context = static_cast<ClosestRayCastContext*>( contextValue );
+	if ( fraction == 0.0f )
+	{
+		return -1.0f;
+	}
+
+	uintptr_t shapeTag = (uintptr_t)b3Shape_GetUserData( shapeId );
+	if ( containsTag( context->excludedShapeTags, shapeTag ) )
+	{
+		return -1.0f;
+	}
+
+	b3BodyId bodyId = b3Shape_GetBody( shapeId );
+	uintptr_t bodyTag = (uintptr_t)b3Body_GetUserData( bodyId );
+	if ( containsTag( context->excludedBodyTags, bodyTag ) )
+	{
+		return -1.0f;
+	}
+
+	context->hit = { shapeId, point, normal, fraction, userMaterialId, triangleIndex, childIndex };
+	context->hasHit = true;
+	return fraction;
 }
 
 struct World
@@ -2130,18 +2165,23 @@ struct World
 
 	val castRayClosest( val origin, val translation, val filterOpts ) const
 	{
-		b3RayResult result = b3World_CastRayClosest( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ),
-													 queryFilterFromOpts( filterOpts ) );
+		ClosestRayCastContext context;
+		readTagArray( filterOpts, "excludeShapeUserData", &context.excludedShapeTags );
+		readTagArray( filterOpts, "excludeBodyUserData", &context.excludedBodyTags );
+		b3World_CastRay( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ), queryFilterFromOpts( filterOpts ),
+						 collectClosestRayHit, &context );
+
 		val o = val::object();
-		o.set( "hit", result.hit );
-		if ( result.hit )
+		o.set( "hit", context.hasHit );
+		if ( context.hasHit )
 		{
-			o.set( "point", fromVec3( result.point ) );
-			o.set( "normal", fromVec3( result.normal ) );
-			o.set( "fraction", result.fraction );
-			o.set( "shapeUserData", tagOf( b3Shape_GetUserData( result.shapeId ) ) );
-			o.set( "bodyUserData", tagOf( b3Body_GetUserData( b3Shape_GetBody( result.shapeId ) ) ) );
-			Shape shape = { result.shapeId, const_cast<World*>( this ) };
+			const RayHit& hit = context.hit;
+			o.set( "point", fromVec3( hit.point ) );
+			o.set( "normal", fromVec3( hit.normal ) );
+			o.set( "fraction", hit.fraction );
+			o.set( "shapeUserData", tagOf( b3Shape_GetUserData( hit.shapeId ) ) );
+			o.set( "bodyUserData", tagOf( b3Body_GetUserData( b3Shape_GetBody( hit.shapeId ) ) ) );
+			Shape shape = { hit.shapeId, const_cast<World*>( this ) };
 			o.set( "shape", val( shape ) );
 		}
 		return o;

@@ -145,13 +145,13 @@ test('capsule and hull shapes simulate', () => {
   world.delete();
 });
 
-test('castRayClosest hits the nearest shape', () => {
+test('castRayClosest hits the nearest included shape', () => {
   const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
 
-  const bodyA = world.createBody({ type: 'static', position: { x: 0, y: 0, z: 0 } });
-  const shapeA = bodyA.createSphere({ radius: 1 });
-  const bodyB = world.createBody({ type: 'static', position: { x: 5, y: 0, z: 0 } });
-  bodyB.createSphere({ radius: 1 });
+  const bodyA = world.createBody({ type: 'static', position: { x: 0, y: 0, z: 0 }, userData: 101 });
+  const shapeA = bodyA.createSphere({ radius: 1, userData: 1001 });
+  const bodyB = world.createBody({ type: 'static', position: { x: 5, y: 0, z: 0 }, userData: 202 });
+  const shapeB = bodyB.createSphere({ radius: 1, userData: 2002 });
 
   const result = world.castRayClosest({ x: -5, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }, undefined);
   assert.equal(result.hit, true);
@@ -160,6 +160,24 @@ test('castRayClosest hits the nearest shape', () => {
   assert.equal(result.bodyUserData, bodyA.getUserData());
   assert.ok(result.shape.isValid());
   result.shape.delete();
+
+  const withoutBodyA = world.castRayClosest(
+    { x: -5, y: 0, z: 0 },
+    { x: 20, y: 0, z: 0 },
+    { excludeBodyUserData: [bodyA.getUserData()] },
+  );
+  assert.equal(withoutBodyA.hit, true);
+  assert.equal(withoutBodyA.shapeUserData, shapeB.getUserData());
+  withoutBodyA.shape.delete();
+
+  const withoutShapeA = world.castRayClosest(
+    { x: -5, y: 0, z: 0 },
+    { x: 20, y: 0, z: 0 },
+    { excludeShapeUserData: [shapeA.getUserData()] },
+  );
+  assert.equal(withoutShapeA.hit, true);
+  assert.equal(withoutShapeA.bodyUserData, bodyB.getUserData());
+  withoutShapeA.shape.delete();
 
   const miss = world.castRayClosest({ x: -5, y: 10, z: 0 }, { x: 20, y: 0, z: 0 }, undefined);
   assert.equal(miss.hit, false);
