@@ -29,6 +29,18 @@ fi
 
 command -v emcc >/dev/null || { echo "emcc not found. Activate emsdk first." >&2; exit 1; }
 
+EMCMAKE=(emcmake)
+if ! command -v emcmake >/dev/null; then
+  if [ -n "${EMSDK_PYTHON:-}" ] && [ -n "${EMSDK:-}" ] && [ -f "$EMSDK/upstream/emscripten/emcmake.py" ]; then
+    # Windows emsdk ships emcmake.py/.bat but no POSIX launcher. Supporting
+    # the Python entry keeps this script usable from Git Bash as well as CI.
+    EMCMAKE=("$EMSDK_PYTHON" "$EMSDK/upstream/emscripten/emcmake.py")
+  else
+    echo "emcmake not found. Activate emsdk first." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$ROOT/dist" "$ROOT/build"
 
 for FLAVOUR in $FLAVOURS; do
@@ -50,7 +62,7 @@ for FLAVOUR in $FLAVOURS; do
   esac
 
   echo "==> cmake ($FLAVOUR, $TARGET_TYPE)"
-  CFLAGS="${FLAVOUR_FLAGS[*]:-}" emcmake cmake \
+  CFLAGS="${FLAVOUR_FLAGS[*]:-}" "${EMCMAKE[@]}" cmake \
     -S "$BOX3D_SRC" \
     -B "$CMAKE_BUILD_DIR" \
     -DCMAKE_BUILD_TYPE="$TARGET_TYPE" \
@@ -75,6 +87,10 @@ for FLAVOUR in $FLAVOURS; do
     -sEXPORT_ES6=1
     -sEXPORT_NAME=Box3D
     -sENVIRONMENT=web,worker,node
+    # Keep the browser build compatible with a strict CSP. Embind otherwise
+    # generates call wrappers with `new Function` at module initialization.
+    -sDYNAMIC_EXECUTION=0
+    -sEMBIND_AOT=1
     -sALLOW_MEMORY_GROWTH=1
     -sALLOW_TABLE_GROWTH=1
     -sFILESYSTEM=0

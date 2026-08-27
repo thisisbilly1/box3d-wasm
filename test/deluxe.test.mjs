@@ -82,3 +82,56 @@ test('single worker and multi worker runs agree', () => {
     assert.ok(d < 0.01, `body ${i} diverged by ${d} between 1 and 4 workers`);
   }
 });
+
+test('production collision and query bindings work in a threaded world', () => {
+  const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 }, workerCount: 4 });
+  const terrain = world.createBody({ type: 'static', userData: 10 });
+  const mesh = terrain.createMesh({
+    vertices: new Float32Array([-5, 0, -5, -5, 0, 5, 5, 0, 5, 5, 0, -5]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    friction: 0.8,
+    frictionCombine: 'min',
+  });
+  assert.ok(mesh.isValid());
+  const closest = mesh.getClosestPoint({ x: 1, y: 3, z: -1 });
+  assert.ok(Math.abs(closest.y) < 1e-5);
+  assert.equal(typeof mesh.containsPoint({ x: 1, y: 3, z: -1 }), 'boolean');
+  const meshContact = mesh.contactBox({
+    center: { x: 0, y: 0.25, z: 0 },
+    halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
+  });
+  assert.ok(meshContact);
+  assert.ok(Math.abs(meshContact.distance + 0.25) < 1e-4);
+  assert.ok(meshContact.normal.y > 0.99);
+
+  const heightTerrain = world.createBody({ type: 'static', position: { x: 10, y: 0, z: 0 } });
+  const heightField = heightTerrain.createHeightField({
+    heights: new Float32Array([0, 0, 0, 0]),
+    countX: 2,
+    countZ: 2,
+  });
+  assert.ok(heightField.isValid());
+
+  const body = world.createBody({ type: 'dynamic', position: { x: 0, y: 3, z: 0 }, userData: 20 });
+  const sphere = body.createSphere({ radius: 0.5, density: 1, frictionCombine: 'average' });
+  assert.ok(sphere.computeMassData().mass > 0);
+  const cylinder = body.createCylinder({ height: 1, radius: 0.25, density: 1 });
+  assert.ok(cylinder.computeMassData().mass > 0);
+  for (let index = 0; index < 180; index++) world.step(DT, SUBSTEPS);
+
+  assert.ok(body.getContactData().length > 0);
+  assert.ok(body.getWorldInverseRotationalInertia().cx.x > 0);
+  assert.equal(typeof body.getWorldPointVelocity({ x: 0, y: 1, z: 0 }).x, 'number');
+
+  const hits = world.castRay(
+    { x: 0, y: 2, z: 0 },
+    { x: 0, y: -4, z: 0 },
+    { excludeBodyUserData: [20], maxHits: 1 },
+  );
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].bodyUserData, 10);
+  hits[0].shape.delete();
+
+  world.destroy();
+  world.delete();
+});

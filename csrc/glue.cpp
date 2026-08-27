@@ -6,15 +6,20 @@
 // - Vectors are plain JS objects {x, y, z}; quaternions are {x, y, z, w}.
 // - Creation functions take a single options object applied over the Box3D
 //   default def, so every field stays optional.
-// - World/Body/Shape/Joint wrappers hold ids only. delete() frees the tiny
-//   wrapper; destroy() removes the object from the simulation.
+// - World/Body/Shape/Joint wrappers hold native ids. Body and shape wrappers
+//   also retain their owning world so mesh/height-field resources can follow
+//   the lifetime of the native shape that references them.
 // - Bodies and shapes get an auto-assigned integer userData tag so event
 //   arrays can be correlated back to application objects.
 
+#include <algorithm>
+#include <array>
 #include <box3d/box3d.h>
+#include <cmath>
 #include <cstdint>
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -82,6 +87,15 @@ static val fromVec3( b3Vec3 v )
 	return o;
 }
 
+static val fromMatrix3( b3Matrix3 m )
+{
+	val o = val::object();
+	o.set( "cx", fromVec3( m.cx ) );
+	o.set( "cy", fromVec3( m.cy ) );
+	o.set( "cz", fromVec3( m.cz ) );
+	return o;
+}
+
 static b3Quat toQuat( const val& v, b3Quat fallback )
 {
 	if ( v.isUndefined() || v.isNull() )
@@ -144,6 +158,108 @@ static uint32_t g_nextShapeTag = 1;
 // Filters and materials
 // ---------------------------------------------------------------------------
 
+enum MaterialCombineRule : uint64_t
+{
+	materialCombineDefault = 0,
+	materialCombineAverage = 1,
+	materialCombineMin = 2,
+	materialCombineMultiply = 3,
+	materialCombineMax = 4,
+};
+
+static constexpr uint64_t userMaterialIdMask = ( 1ULL << 53 ) - 1ULL;
+static constexpr int frictionCombineShift = 53;
+static constexpr int restitutionCombineShift = 56;
+static constexpr uint64_t materialCombineMask = 7ULL;
+
+static MaterialCombineRule materialCombineRuleFromOpts( const val& o, const char* key )
+{
+	if ( !hasKey( o, key ) )
+	{
+		return materialCombineDefault;
+	}
+
+	std::string rule = o[key].as<std::string>();
+	if ( rule == "average" )
+	{
+		return materialCombineAverage;
+	}
+	if ( rule == "min" )
+	{
+		return materialCombineMin;
+	}
+	if ( rule == "multiply" )
+	{
+		return materialCombineMultiply;
+	}
+	if ( rule == "max" )
+	{
+		return materialCombineMax;
+	}
+	return materialCombineDefault;
+}
+
+static uint64_t packMaterialId( uint64_t userMaterialId, MaterialCombineRule frictionRule, MaterialCombineRule restitutionRule )
+{
+	return ( userMaterialId & userMaterialIdMask ) | ( (uint64_t)frictionRule << frictionCombineShift ) |
+		   ( (uint64_t)restitutionRule << restitutionCombineShift );
+}
+
+static uint64_t unpackMaterialId( uint64_t packedMaterialId )
+{
+	return packedMaterialId & userMaterialIdMask;
+}
+
+static MaterialCombineRule unpackCombineRule( uint64_t packedMaterialId, int shift )
+{
+	return (MaterialCombineRule)( ( packedMaterialId >> shift ) & materialCombineMask );
+}
+
+static MaterialCombineRule selectCombineRule( MaterialCombineRule ruleA, MaterialCombineRule ruleB )
+{
+	if ( ruleA == materialCombineDefault )
+	{
+		return ruleB;
+	}
+	if ( ruleB == materialCombineDefault )
+	{
+		return ruleA;
+	}
+	return ruleA > ruleB ? ruleA : ruleB;
+}
+
+static float combineMaterialValues( float valueA, uint64_t materialIdA, float valueB, uint64_t materialIdB, int shift,
+									float defaultValue )
+{
+	MaterialCombineRule rule =
+		selectCombineRule( unpackCombineRule( materialIdA, shift ), unpackCombineRule( materialIdB, shift ) );
+	switch ( rule )
+	{
+		case materialCombineAverage:
+			return 0.5f * ( valueA + valueB );
+		case materialCombineMin:
+			return b3MinFloat( valueA, valueB );
+		case materialCombineMultiply:
+			return valueA * valueB;
+		case materialCombineMax:
+			return b3MaxFloat( valueA, valueB );
+		default:
+			return defaultValue;
+	}
+}
+
+static float mixFriction( float frictionA, uint64_t materialIdA, float frictionB, uint64_t materialIdB )
+{
+	return combineMaterialValues( frictionA, materialIdA, frictionB, materialIdB, frictionCombineShift,
+								  std::sqrt( frictionA * frictionB ) );
+}
+
+static float mixRestitution( float restitutionA, uint64_t materialIdA, float restitutionB, uint64_t materialIdB )
+{
+	return combineMaterialValues( restitutionA, materialIdA, restitutionB, materialIdB, restitutionCombineShift,
+								  b3MaxFloat( restitutionA, restitutionB ) );
+}
+
 static b3Filter filterFromOpts( const val& o )
 {
 	b3Filter filter = b3DefaultFilter();
@@ -181,7 +297,9 @@ static b3ShapeDef shapeDefFromOpts( const val& o )
 	def.baseMaterial.restitution = getFloat( o, "restitution", def.baseMaterial.restitution );
 	def.baseMaterial.rollingResistance = getFloat( o, "rollingResistance", def.baseMaterial.rollingResistance );
 	def.baseMaterial.tangentVelocity = getVec3( o, "tangentVelocity", def.baseMaterial.tangentVelocity );
-	def.baseMaterial.userMaterialId = getU64( o, "userMaterialId", def.baseMaterial.userMaterialId );
+	def.baseMaterial.userMaterialId = packMaterialId( getU64( o, "userMaterialId", def.baseMaterial.userMaterialId ),
+													  materialCombineRuleFromOpts( o, "frictionCombine" ),
+													  materialCombineRuleFromOpts( o, "restitutionCombine" ) );
 	def.isSensor = getBool( o, "isSensor", def.isSensor );
 	def.enableSensorEvents = getBool( o, "enableSensorEvents", def.enableSensorEvents );
 	def.enableContactEvents = getBool( o, "enableContactEvents", def.enableContactEvents );
@@ -200,20 +318,122 @@ static b3ShapeDef shapeDefFromOpts( const val& o )
 // Wrappers
 // ---------------------------------------------------------------------------
 
+struct World;
+
+struct BoxContactContext
+{
+	const b3Mesh* mesh;
+	const b3HullData* boxHull;
+	b3Vec3 boxCenter;
+	float separation;
+	b3Vec3 normal;
+	bool hit;
+};
+
+static void considerBoxContact( BoxContactContext* context, const b3LocalManifold& manifold )
+{
+	for ( int i = 0; i < manifold.pointCount; ++i )
+	{
+		const b3LocalManifoldPoint& point = manifold.points[i];
+		if ( context->hit && point.separation >= context->separation )
+		{
+			continue;
+		}
+
+		b3Vec3 normal = manifold.normal;
+		if ( b3Dot( normal, b3Sub( context->boxCenter, point.point ) ) < 0.0f )
+		{
+			normal = b3Neg( normal );
+		}
+		context->separation = point.separation;
+		context->normal = normal;
+		context->hit = true;
+	}
+}
+
+static bool collectMeshBoxContact( b3Vec3 a, b3Vec3 b, b3Vec3 c, int triangleIndex, void* rawContext )
+{
+	BoxContactContext* context = static_cast<BoxContactContext*>( rawContext );
+	b3LocalManifoldPoint points[4] = {};
+	b3LocalManifold manifold = {};
+	manifold.points = points;
+	b3SATCache cache = {};
+	const uint8_t* flags = b3GetMeshFlags( context->mesh->data );
+	b3CollideHullAndTriangle( &manifold, 4, context->boxHull, a, b, c, flags ? flags[triangleIndex] : 0, &cache );
+	if ( manifold.pointCount == 0 )
+	{
+		// Production pose validation must also recover boxes submitted from the
+		// back side of a closed mesh surface. Box3D's simulation contact is
+		// intentionally one-sided, so retry the isolated query with reversed
+		// winding; this does not change the world's normal collision behavior.
+		cache = {};
+		b3CollideHullAndTriangle( &manifold, 4, context->boxHull, a, c, b, 0, &cache );
+	}
+	considerBoxContact( context, manifold );
+	return true;
+}
+
+static b3Vec3 closestPointOnTriangle( b3Vec3 point, b3Vec3 a, b3Vec3 b, b3Vec3 c )
+{
+	b3Vec3 ab = b3Sub( b, a );
+	b3Vec3 ac = b3Sub( c, a );
+	b3Vec3 ap = b3Sub( point, a );
+	float d1 = b3Dot( ab, ap );
+	float d2 = b3Dot( ac, ap );
+	if ( d1 <= 0.0f && d2 <= 0.0f )
+	{
+		return a;
+	}
+
+	b3Vec3 bp = b3Sub( point, b );
+	float d3 = b3Dot( ab, bp );
+	float d4 = b3Dot( ac, bp );
+	if ( d3 >= 0.0f && d4 <= d3 )
+	{
+		return b;
+	}
+
+	float vc = d1 * d4 - d3 * d2;
+	if ( vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f )
+	{
+		return b3MulAdd( a, d1 / ( d1 - d3 ), ab );
+	}
+
+	b3Vec3 cp = b3Sub( point, c );
+	float d5 = b3Dot( ab, cp );
+	float d6 = b3Dot( ac, cp );
+	if ( d6 >= 0.0f && d5 <= d6 )
+	{
+		return c;
+	}
+
+	float vb = d5 * d2 - d1 * d6;
+	if ( vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f )
+	{
+		return b3MulAdd( a, d2 / ( d2 - d6 ), ac );
+	}
+
+	float va = d3 * d6 - d5 * d4;
+	if ( va <= 0.0f && d4 - d3 >= 0.0f && d5 - d6 >= 0.0f )
+	{
+		return b3MulAdd( b, ( d4 - d3 ) / ( ( d4 - d3 ) + ( d5 - d6 ) ), b3Sub( c, b ) );
+	}
+
+	float denominator = 1.0f / ( va + vb + vc );
+	return b3Add( a, b3Add( b3MulSV( vb * denominator, ab ), b3MulSV( vc * denominator, ac ) ) );
+}
+
 struct Shape
 {
 	b3ShapeId id;
+	World* owner;
 
 	bool isValid() const
 	{
 		return b3Shape_IsValid( id );
 	}
 
-	void destroy( bool updateBodyMass )
-	{
-		b3DestroyShape( id, updateBodyMass );
-		id = b3_nullShapeId;
-	}
+	void destroy( bool updateBodyMass );
 
 	std::string getType() const
 	{
@@ -276,6 +496,16 @@ struct Shape
 		b3Shape_SetDensity( id, density, updateBodyMass );
 	}
 
+	val computeMassData() const
+	{
+		b3MassData massData = b3Shape_ComputeMassData( id );
+		val o = val::object();
+		o.set( "mass", massData.mass );
+		o.set( "center", fromVec3( massData.center ) );
+		o.set( "inertia", fromMatrix3( massData.inertia ) );
+		return o;
+	}
+
 	bool isSensor() const
 	{
 		return b3Shape_IsSensor( id );
@@ -322,6 +552,191 @@ struct Shape
 		o.set( "lowerBound", fromVec3( aabb.lowerBound ) );
 		o.set( "upperBound", fromVec3( aabb.upperBound ) );
 		return o;
+	}
+
+	val getClosestPoint( val target ) const
+	{
+		b3Vec3 worldTarget = toVec3( target, b3Vec3_zero );
+		if ( b3Shape_GetType( id ) != b3_meshShape )
+		{
+			return fromVec3( b3Shape_GetClosestPoint( id, worldTarget ) );
+		}
+
+		b3BodyId bodyId = b3Shape_GetBody( id );
+		b3Transform shapeTransform = {
+			.p = b3Body_GetPosition( bodyId ),
+			.q = b3Body_GetRotation( bodyId ),
+		};
+		b3Vec3 localTarget = b3InvTransformPoint( shapeTransform, worldTarget );
+		b3Mesh mesh = b3Shape_GetMesh( id );
+		const b3Vec3* vertices = b3GetMeshVertices( mesh.data );
+		const b3MeshTriangle* triangles = b3GetMeshTriangles( mesh.data );
+		b3Vec3 closest = b3Vec3_zero;
+		float closestDistanceSquared = std::numeric_limits<float>::max();
+		for ( int i = 0; i < mesh.data->triangleCount; ++i )
+		{
+			const b3MeshTriangle& triangle = triangles[i];
+			b3Vec3 a = b3Mul( vertices[triangle.index1], mesh.scale );
+			b3Vec3 b = b3Mul( vertices[triangle.index2], mesh.scale );
+			b3Vec3 c = b3Mul( vertices[triangle.index3], mesh.scale );
+			b3Vec3 candidate = closestPointOnTriangle( localTarget, a, b, c );
+			float distanceSquared = b3DistanceSquared( candidate, localTarget );
+			if ( distanceSquared < closestDistanceSquared )
+			{
+				closestDistanceSquared = distanceSquared;
+				closest = candidate;
+			}
+		}
+		return fromVec3( b3TransformPoint( shapeTransform, closest ) );
+	}
+
+	bool containsPoint( val target ) const
+	{
+		if ( !b3Shape_IsValid( id ) )
+		{
+			return false;
+		}
+
+		b3BodyId bodyId = b3Shape_GetBody( id );
+		b3Transform shapeTransform = {
+			.p = b3Body_GetPosition( bodyId ),
+			.q = b3Body_GetRotation( bodyId ),
+		};
+		b3Vec3 localTarget = b3InvTransformPoint( shapeTransform, toVec3( target, b3Vec3_zero ) );
+		switch ( b3Shape_GetType( id ) )
+		{
+			case b3_sphereShape:
+			{
+				b3Sphere sphere = b3Shape_GetSphere( id );
+				return b3DistanceSquared( localTarget, sphere.center ) <= sphere.radius * sphere.radius;
+			}
+			case b3_capsuleShape:
+			{
+				b3Capsule capsule = b3Shape_GetCapsule( id );
+				b3Vec3 axis = b3Sub( capsule.center2, capsule.center1 );
+				float axisLengthSquared = b3Dot( axis, axis );
+				float fraction =
+					axisLengthSquared > 0.0f
+						? b3ClampFloat( b3Dot( b3Sub( localTarget, capsule.center1 ), axis ) / axisLengthSquared, 0.0f, 1.0f )
+						: 0.0f;
+				b3Vec3 closest = b3MulAdd( capsule.center1, fraction, axis );
+				return b3DistanceSquared( localTarget, closest ) <= capsule.radius * capsule.radius;
+			}
+			case b3_hullShape:
+			{
+				const b3HullData* hull = b3Shape_GetHull( id );
+				const b3Plane* planes = b3GetHullPlanes( hull );
+				for ( int i = 0; i < hull->faceCount; ++i )
+				{
+					if ( b3Dot( planes[i].normal, localTarget ) - planes[i].offset > 1.0e-5f )
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+			case b3_meshShape:
+			{
+				// A triangle mesh is a thin collision surface in Box3D. For the closed,
+				// consistently wound production meshes, the signed solid-angle sum is
+				// +/-4*pi inside and zero outside. This avoids an arbitrary parity ray
+				// passing exactly through a shared edge or vertex.
+				b3Mesh mesh = b3Shape_GetMesh( id );
+				const b3Vec3* vertices = b3GetMeshVertices( mesh.data );
+				const b3MeshTriangle* triangles = b3GetMeshTriangles( mesh.data );
+				double winding = 0.0;
+				for ( int i = 0; i < mesh.data->triangleCount; ++i )
+				{
+					const b3MeshTriangle& triangle = triangles[i];
+					b3Vec3 vertexA = b3Mul( vertices[triangle.index1], mesh.scale );
+					b3Vec3 vertexB = b3Mul( vertices[triangle.index2], mesh.scale );
+					b3Vec3 vertexC = b3Mul( vertices[triangle.index3], mesh.scale );
+					b3Vec3 closest = closestPointOnTriangle( localTarget, vertexA, vertexB, vertexC );
+					if ( b3DistanceSquared( closest, localTarget ) <= 1.0e-10f )
+					{
+						return true;
+					}
+
+					b3Vec3 a = b3Sub( vertexA, localTarget );
+					b3Vec3 b = b3Sub( vertexB, localTarget );
+					b3Vec3 c = b3Sub( vertexC, localTarget );
+					double lengthA = b3Length( a );
+					double lengthB = b3Length( b );
+					double lengthC = b3Length( c );
+					double numerator = b3Dot( a, b3Cross( b, c ) );
+					double denominator =
+						lengthA * lengthB * lengthC + b3Dot( a, b ) * lengthC + b3Dot( b, c ) * lengthA + b3Dot( c, a ) * lengthB;
+					winding += 2.0 * std::atan2( numerator, denominator );
+				}
+				return std::abs( winding ) > 6.283185307179586;
+			}
+			default:
+				return false;
+		}
+	}
+
+	val contactBox( val opts ) const
+	{
+		val none = val::null();
+		if ( !b3Shape_IsValid( id ) )
+		{
+			return none;
+		}
+
+		b3Vec3 halfExtents = getVec3( opts, "halfExtents", { 0.5f, 0.5f, 0.5f } );
+		if ( halfExtents.x <= 0.0f || halfExtents.y <= 0.0f || halfExtents.z <= 0.0f )
+		{
+			return none;
+		}
+
+		b3Transform boxTransform = b3Transform_identity;
+		boxTransform.p = getVec3( opts, "center", b3Vec3_zero );
+		boxTransform.q = getQuat( opts, "rotation", b3Quat_identity );
+		b3BodyId bodyId = b3Shape_GetBody( id );
+		b3Transform shapeTransform = {
+			.p = b3Body_GetPosition( bodyId ),
+			.q = b3Body_GetRotation( bodyId ),
+		};
+		b3Transform boxToShape = b3InvMulTransforms( shapeTransform, boxTransform );
+		BoxContactContext context = {
+			.mesh = nullptr,
+			.boxHull = nullptr,
+			.boxCenter = boxToShape.p,
+			.separation = std::numeric_limits<float>::max(),
+			.normal = b3Vec3_zero,
+			.hit = false,
+		};
+
+		b3ShapeType type = b3Shape_GetType( id );
+		if ( type == b3_hullShape )
+		{
+			b3BoxHull box = b3MakeBoxHull( halfExtents.x, halfExtents.y, halfExtents.z );
+			b3LocalManifoldPoint points[8] = {};
+			b3LocalManifold manifold = {};
+			manifold.points = points;
+			b3SATCache cache = {};
+			b3CollideHulls( &manifold, 8, b3Shape_GetHull( id ), &box.base, boxToShape, &cache );
+			considerBoxContact( &context, manifold );
+		}
+		else if ( type == b3_meshShape )
+		{
+			b3Mesh mesh = b3Shape_GetMesh( id );
+			b3BoxHull box = b3MakeTransformedBoxHull( halfExtents.x, halfExtents.y, halfExtents.z, boxToShape );
+			context.mesh = &mesh;
+			context.boxHull = &box.base;
+			b3AABB bounds = b3ComputeHullAABB( &box.base, b3Transform_identity );
+			b3QueryMesh( &mesh, bounds, collectMeshBoxContact, &context );
+		}
+
+		if ( !context.hit )
+		{
+			return none;
+		}
+
+		val result = val::object();
+		result.set( "distance", context.separation );
+		result.set( "normal", fromVec3( b3RotateVector( shapeTransform.q, context.normal ) ) );
+		return result;
 	}
 
 	val rayCast( val origin, val translation ) const
@@ -776,17 +1191,15 @@ struct FilterJoint : Joint
 struct Body
 {
 	b3BodyId id;
+	World* owner;
+	std::array<float, 27> motionStateBuffer = {};
 
 	bool isValid() const
 	{
 		return b3Body_IsValid( id );
 	}
 
-	void destroy()
-	{
-		b3DestroyBody( id );
-		id = b3_nullBodyId;
-	}
+	void destroy();
 
 	std::string getType() const
 	{
@@ -881,9 +1294,83 @@ struct Body
 		return fromVec3( b3Body_GetAngularVelocity( id ) );
 	}
 
+	val getMotionState() const
+	{
+		val state = val::object();
+		state.set( "position", fromVec3( b3Body_GetPosition( id ) ) );
+		state.set( "rotation", fromQuat( b3Body_GetRotation( id ) ) );
+		state.set( "linearVelocity", fromVec3( b3Body_GetLinearVelocity( id ) ) );
+		state.set( "angularVelocity", fromVec3( b3Body_GetAngularVelocity( id ) ) );
+		state.set( "worldCenterOfMass", fromVec3( b3Body_GetWorldCenterOfMass( id ) ) );
+		state.set( "worldInverseRotationalInertia", fromMatrix3( b3Body_GetWorldInverseRotationalInertia( id ) ) );
+		state.set( "inverseMass", b3Body_GetInverseMass( id ) );
+		state.set( "gravityScale", b3Body_GetGravityScale( id ) );
+		return state;
+	}
+
+	val getMotionStateBuffer()
+	{
+		const b3Vec3 position = b3Body_GetPosition( id );
+		const b3Quat rotation = b3Body_GetRotation( id );
+		const b3Vec3 linearVelocity = b3Body_GetLinearVelocity( id );
+		const b3Vec3 angularVelocity = b3Body_GetAngularVelocity( id );
+		const b3Vec3 worldCenterOfMass = b3Body_GetWorldCenterOfMass( id );
+		const b3Matrix3 inverseInertia = b3Body_GetWorldInverseRotationalInertia( id );
+		motionStateBuffer = {
+			position.x,
+			position.y,
+			position.z,
+			rotation.v.x,
+			rotation.v.y,
+			rotation.v.z,
+			rotation.s,
+			linearVelocity.x,
+			linearVelocity.y,
+			linearVelocity.z,
+			angularVelocity.x,
+			angularVelocity.y,
+			angularVelocity.z,
+			worldCenterOfMass.x,
+			worldCenterOfMass.y,
+			worldCenterOfMass.z,
+			inverseInertia.cx.x,
+			inverseInertia.cx.y,
+			inverseInertia.cx.z,
+			inverseInertia.cy.x,
+			inverseInertia.cy.y,
+			inverseInertia.cy.z,
+			inverseInertia.cz.x,
+			inverseInertia.cz.y,
+			inverseInertia.cz.z,
+			b3Body_GetInverseMass( id ),
+			b3Body_GetGravityScale( id ),
+		};
+		return val( emscripten::typed_memory_view( motionStateBuffer.size(), motionStateBuffer.data() ) );
+	}
+
 	void setAngularVelocity( val v )
 	{
 		b3Body_SetAngularVelocity( id, toVec3( v, b3Vec3_zero ) );
+	}
+
+	void setVelocities( val linearVelocity, val angularVelocity )
+	{
+		b3Body_SetLinearVelocity( id, toVec3( linearVelocity, b3Vec3_zero ) );
+		b3Body_SetAngularVelocity( id, toVec3( angularVelocity, b3Vec3_zero ) );
+	}
+
+	void setVelocitiesValues( float linearX, float linearY, float linearZ, float angularX, float angularY, float angularZ )
+	{
+		b3Vec3 linearVelocity = b3Vec3_zero;
+		linearVelocity.x = linearX;
+		linearVelocity.y = linearY;
+		linearVelocity.z = linearZ;
+		b3Vec3 angularVelocity = b3Vec3_zero;
+		angularVelocity.x = angularX;
+		angularVelocity.y = angularY;
+		angularVelocity.z = angularZ;
+		b3Body_SetLinearVelocity( id, linearVelocity );
+		b3Body_SetAngularVelocity( id, angularVelocity );
 	}
 
 	void applyForce( val force, val point, bool wake )
@@ -916,6 +1403,27 @@ struct Body
 		b3Body_ApplyAngularImpulse( id, toVec3( impulse, b3Vec3_zero ), wake );
 	}
 
+	void applyImpulseBatch( val pointImpulses, val angularImpulses, bool wake )
+	{
+		int pointValueCount = pointImpulses["length"].as<int>();
+		for ( int valueIndex = 0; valueIndex + 5 < pointValueCount; valueIndex += 6 )
+		{
+			b3Vec3 impulse = { pointImpulses[valueIndex].as<float>(), pointImpulses[valueIndex + 1].as<float>(),
+							   pointImpulses[valueIndex + 2].as<float>() };
+			b3Vec3 point = { pointImpulses[valueIndex + 3].as<float>(), pointImpulses[valueIndex + 4].as<float>(),
+							 pointImpulses[valueIndex + 5].as<float>() };
+			b3Body_ApplyLinearImpulse( id, impulse, point, wake );
+		}
+
+		int angularValueCount = angularImpulses["length"].as<int>();
+		for ( int valueIndex = 0; valueIndex + 2 < angularValueCount; valueIndex += 3 )
+		{
+			b3Vec3 impulse = { angularImpulses[valueIndex].as<float>(), angularImpulses[valueIndex + 1].as<float>(),
+							   angularImpulses[valueIndex + 2].as<float>() };
+			b3Body_ApplyAngularImpulse( id, impulse, wake );
+		}
+	}
+
 	float getMass() const
 	{
 		return b3Body_GetMass( id );
@@ -944,6 +1452,16 @@ struct Body
 	val getWorldPoint( val localPoint ) const
 	{
 		return fromVec3( b3Body_GetWorldPoint( id, toVec3( localPoint, b3Vec3_zero ) ) );
+	}
+
+	val getWorldPointVelocity( val worldPoint ) const
+	{
+		return fromVec3( b3Body_GetWorldPointVelocity( id, toVec3( worldPoint, b3Vec3_zero ) ) );
+	}
+
+	val getWorldInverseRotationalInertia() const
+	{
+		return fromMatrix3( b3Body_GetWorldInverseRotationalInertia( id ) );
 	}
 
 	float getLinearDamping() const
@@ -1057,6 +1575,58 @@ struct Body
 		return o;
 	}
 
+	val getContactData() const
+	{
+		int capacity = b3Body_GetContactCapacity( id );
+		std::vector<b3ContactData> contacts( capacity );
+		int count = capacity > 0 ? b3Body_GetContactData( id, contacts.data(), capacity ) : 0;
+		val out = val::array();
+
+		for ( int contactIndex = 0; contactIndex < count; ++contactIndex )
+		{
+			const b3ContactData& contact = contacts[contactIndex];
+			val contactValue = val::object();
+			contactValue.set( "shapeUserDataA", tagOf( b3Shape_GetUserData( contact.shapeIdA ) ) );
+			contactValue.set( "shapeUserDataB", tagOf( b3Shape_GetUserData( contact.shapeIdB ) ) );
+			contactValue.set( "bodyUserDataA", tagOf( b3Body_GetUserData( b3Shape_GetBody( contact.shapeIdA ) ) ) );
+			contactValue.set( "bodyUserDataB", tagOf( b3Body_GetUserData( b3Shape_GetBody( contact.shapeIdB ) ) ) );
+
+			val manifolds = val::array();
+			for ( int manifoldIndex = 0; manifoldIndex < contact.manifoldCount; ++manifoldIndex )
+			{
+				const b3Manifold& manifold = contact.manifolds[manifoldIndex];
+				val manifoldValue = val::object();
+				manifoldValue.set( "normal", fromVec3( manifold.normal ) );
+				manifoldValue.set( "twistImpulse", manifold.twistImpulse );
+				manifoldValue.set( "frictionImpulse", fromVec3( manifold.frictionImpulse ) );
+				manifoldValue.set( "rollingImpulse", fromVec3( manifold.rollingImpulse ) );
+
+				val points = val::array();
+				for ( int pointIndex = 0; pointIndex < manifold.pointCount; ++pointIndex )
+				{
+					const b3ManifoldPoint& point = manifold.points[pointIndex];
+					val pointValue = val::object();
+					pointValue.set( "anchorA", fromVec3( point.anchorA ) );
+					pointValue.set( "anchorB", fromVec3( point.anchorB ) );
+					pointValue.set( "separation", point.separation );
+					pointValue.set( "normalImpulse", point.normalImpulse );
+					pointValue.set( "totalNormalImpulse", point.totalNormalImpulse );
+					pointValue.set( "normalVelocity", point.normalVelocity );
+					pointValue.set( "featureId", (double)point.featureId );
+					pointValue.set( "triangleIndex", point.triangleIndex );
+					pointValue.set( "persisted", point.persisted );
+					points.set( pointIndex, pointValue );
+				}
+				manifoldValue.set( "points", points );
+				manifolds.set( manifoldIndex, manifoldValue );
+			}
+			contactValue.set( "manifolds", manifolds );
+			out.set( contactIndex, contactValue );
+		}
+
+		return out;
+	}
+
 	// Shape creation. One options object carries both geometry and material.
 
 	Shape createSphere( val opts )
@@ -1065,7 +1635,7 @@ struct Body
 		b3Sphere sphere;
 		sphere.center = getVec3( opts, "center", b3Vec3_zero );
 		sphere.radius = getFloat( opts, "radius", 0.5f );
-		Shape shape = { b3CreateSphereShape( id, &def, &sphere ) };
+		Shape shape = { b3CreateSphereShape( id, &def, &sphere ), owner };
 		return shape;
 	}
 
@@ -1089,7 +1659,7 @@ struct Body
 			capsule.center1 = getVec3( opts, "center1", c1 );
 			capsule.center2 = getVec3( opts, "center2", c2 );
 		}
-		Shape shape = { b3CreateCapsuleShape( id, &def, &capsule ) };
+		Shape shape = { b3CreateCapsuleShape( id, &def, &capsule ), owner };
 		return shape;
 	}
 
@@ -1120,7 +1690,34 @@ struct Body
 		{
 			box = b3MakeBoxHull( he.x, he.y, he.z );
 		}
-		Shape shape = { b3CreateHullShape( id, &def, &box.base ) };
+		Shape shape = { b3CreateHullShape( id, &def, &box.base ), owner };
+		return shape;
+	}
+
+	Shape createCylinder( val opts )
+	{
+		b3ShapeDef def = shapeDefFromOpts( opts );
+		float height = std::max( getFloat( opts, "height", 1.0f ), 0.001f );
+		float radius = std::max( getFloat( opts, "radius", 0.5f ), 0.001f );
+		int sides = std::clamp( getInt( opts, "sides", 16 ), 3, 32 );
+		b3HullData* hull = b3CreateCylinder( height, radius, -0.5f * height, sides );
+		if ( hull == nullptr )
+		{
+			return { b3_nullShapeId, owner };
+		}
+
+		if ( hasKey( opts, "rotation" ) || hasKey( opts, "center" ) )
+		{
+			b3Transform xf;
+			xf.p = getVec3( opts, "center", b3Vec3_zero );
+			xf.q = getQuat( opts, "rotation", b3Quat_identity );
+			b3HullData* transformed = b3CloneAndTransformHull( hull, xf, { 1.0f, 1.0f, 1.0f } );
+			b3DestroyHull( hull );
+			hull = transformed;
+		}
+
+		Shape shape = { b3CreateHullShape( id, &def, hull ), owner };
+		b3DestroyHull( hull );
 		return shape;
 	}
 
@@ -1139,15 +1736,18 @@ struct Body
 		b3HullData* hull = b3CreateHull( points.data(), (int)points.size(), maxVertices );
 		if ( hull == nullptr )
 		{
-			Shape shape = { b3_nullShapeId };
+			Shape shape = { b3_nullShapeId, owner };
 			return shape;
 		}
 		// The world interns hull geometry in its hull database, so the
 		// temporary may be freed right after shape creation.
-		Shape shape = { b3CreateHullShape( id, &def, hull ) };
+		Shape shape = { b3CreateHullShape( id, &def, hull ), owner };
 		b3DestroyHull( hull );
 		return shape;
 	}
+
+	Shape createMesh( val opts );
+	Shape createHeightField( val opts );
 };
 
 static void applyJointBase( b3JointDef* base, const Body& a, const Body& b, const val& opts )
@@ -1169,9 +1769,140 @@ static void applyJointBase( b3JointDef* base, const Body& a, const Body& b, cons
 	base->torqueThreshold = getFloat( opts, "torqueThreshold", base->torqueThreshold );
 }
 
+struct RayHit
+{
+	b3ShapeId shapeId;
+	b3Pos point;
+	b3Vec3 normal;
+	float fraction;
+	uint64_t userMaterialId;
+	int triangleIndex;
+	int childIndex;
+};
+
+struct RayCastContext
+{
+	std::vector<uintptr_t> excludedShapeTags;
+	std::vector<uintptr_t> excludedBodyTags;
+	std::vector<RayHit> hits;
+};
+
+struct ClosestRayCastContext
+{
+	std::vector<uintptr_t> excludedShapeTags;
+	std::vector<uintptr_t> excludedBodyTags;
+	RayHit hit = {};
+	bool hasHit = false;
+};
+
+struct ClosestBodyExcludingRayCastContext
+{
+	uintptr_t excludedBodyTag = 0;
+	RayHit hit = {};
+	bool hasHit = false;
+};
+
+static bool containsTag( const std::vector<uintptr_t>& tags, uintptr_t tag )
+{
+	return std::find( tags.begin(), tags.end(), tag ) != tags.end();
+}
+
+static void readTagArray( const val& opts, const char* key, std::vector<uintptr_t>* output )
+{
+	if ( !hasKey( opts, key ) )
+	{
+		return;
+	}
+	val values = opts[key];
+	int count = values["length"].as<int>();
+	output->reserve( count );
+	for ( int i = 0; i < count; ++i )
+	{
+		output->push_back( (uintptr_t)values[i].as<double>() );
+	}
+}
+
+static float collectRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId,
+							int triangleIndex, int childIndex, void* contextValue )
+{
+	RayCastContext* context = static_cast<RayCastContext*>( contextValue );
+	uintptr_t shapeTag = (uintptr_t)b3Shape_GetUserData( shapeId );
+	if ( containsTag( context->excludedShapeTags, shapeTag ) )
+	{
+		return -1.0f;
+	}
+
+	b3BodyId bodyId = b3Shape_GetBody( shapeId );
+	uintptr_t bodyTag = (uintptr_t)b3Body_GetUserData( bodyId );
+	if ( containsTag( context->excludedBodyTags, bodyTag ) )
+	{
+		return -1.0f;
+	}
+
+	context->hits.push_back( { shapeId, point, normal, fraction, userMaterialId, triangleIndex, childIndex } );
+	return 1.0f;
+}
+
+static float collectClosestRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId,
+								   int triangleIndex, int childIndex, void* contextValue )
+{
+	ClosestRayCastContext* context = static_cast<ClosestRayCastContext*>( contextValue );
+	if ( fraction == 0.0f )
+	{
+		return -1.0f;
+	}
+
+	uintptr_t shapeTag = (uintptr_t)b3Shape_GetUserData( shapeId );
+	if ( containsTag( context->excludedShapeTags, shapeTag ) )
+	{
+		return -1.0f;
+	}
+
+	b3BodyId bodyId = b3Shape_GetBody( shapeId );
+	uintptr_t bodyTag = (uintptr_t)b3Body_GetUserData( bodyId );
+	if ( containsTag( context->excludedBodyTags, bodyTag ) )
+	{
+		return -1.0f;
+	}
+
+	context->hit = { shapeId, point, normal, fraction, userMaterialId, triangleIndex, childIndex };
+	context->hasHit = true;
+	return fraction;
+}
+
+static float collectClosestBodyExcludingRayHit( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction,
+												uint64_t userMaterialId, int triangleIndex, int childIndex, void* contextValue )
+{
+	ClosestBodyExcludingRayCastContext* context = static_cast<ClosestBodyExcludingRayCastContext*>( contextValue );
+	if ( fraction == 0.0f )
+	{
+		return -1.0f;
+	}
+
+	b3BodyId bodyId = b3Shape_GetBody( shapeId );
+	if ( (uintptr_t)b3Body_GetUserData( bodyId ) == context->excludedBodyTag )
+	{
+		return -1.0f;
+	}
+
+	context->hit = { shapeId, point, normal, fraction, userMaterialId, triangleIndex, childIndex };
+	context->hasHit = true;
+	return fraction;
+}
+
 struct World
 {
+	struct OwnedShapeResource
+	{
+		b3ShapeId shapeId;
+		b3BodyId bodyId;
+		b3MeshData* mesh;
+		b3HeightFieldData* heightField;
+	};
+
 	b3WorldId id;
+	std::vector<OwnedShapeResource> ownedShapeResources;
+	std::array<double, 6> closestRayResultBuffer = {};
 
 	World()
 		: World( val::undefined() )
@@ -1181,6 +1912,8 @@ struct World
 	explicit World( val opts )
 	{
 		b3WorldDef def = b3DefaultWorldDef();
+		def.frictionCallback = mixFriction;
+		def.restitutionCallback = mixRestitution;
 		if ( !opts.isUndefined() && !opts.isNull() )
 		{
 			def.gravity = getVec3( opts, "gravity", def.gravity );
@@ -1208,6 +1941,11 @@ struct World
 		id = b3CreateWorld( &def );
 	}
 
+	~World()
+	{
+		destroy();
+	}
+
 	bool isValid() const
 	{
 		return b3World_IsValid( id );
@@ -1215,8 +1953,80 @@ struct World
 
 	void destroy()
 	{
-		b3DestroyWorld( id );
-		id = b3_nullWorldId;
+		if ( b3World_IsValid( id ) )
+		{
+			b3DestroyWorld( id );
+			id = b3_nullWorldId;
+		}
+		for ( OwnedShapeResource& resource : ownedShapeResources )
+		{
+			if ( resource.mesh != nullptr )
+			{
+				b3DestroyMesh( resource.mesh );
+			}
+			if ( resource.heightField != nullptr )
+			{
+				b3DestroyHeightField( resource.heightField );
+			}
+		}
+		ownedShapeResources.clear();
+	}
+
+	void setMaterialCallbacks()
+	{
+		b3World_SetFrictionCallback( id, mixFriction );
+		b3World_SetRestitutionCallback( id, mixRestitution );
+	}
+
+	void ownMesh( b3ShapeId shapeId, b3BodyId bodyId, b3MeshData* mesh )
+	{
+		ownedShapeResources.push_back( { shapeId, bodyId, mesh, nullptr } );
+	}
+
+	void ownHeightField( b3ShapeId shapeId, b3BodyId bodyId, b3HeightFieldData* heightField )
+	{
+		ownedShapeResources.push_back( { shapeId, bodyId, nullptr, heightField } );
+	}
+
+	void releaseShapeResource( b3ShapeId shapeId )
+	{
+		auto iterator =
+			std::find_if( ownedShapeResources.begin(), ownedShapeResources.end(),
+						  [shapeId]( const OwnedShapeResource& resource ) { return B3_ID_EQUALS( resource.shapeId, shapeId ); } );
+		if ( iterator == ownedShapeResources.end() )
+		{
+			return;
+		}
+		if ( iterator->mesh != nullptr )
+		{
+			b3DestroyMesh( iterator->mesh );
+		}
+		if ( iterator->heightField != nullptr )
+		{
+			b3DestroyHeightField( iterator->heightField );
+		}
+		ownedShapeResources.erase( iterator );
+	}
+
+	void releaseBodyResources( b3BodyId bodyId )
+	{
+		for ( size_t index = ownedShapeResources.size(); index > 0; --index )
+		{
+			OwnedShapeResource& resource = ownedShapeResources[index - 1];
+			if ( !B3_ID_EQUALS( resource.bodyId, bodyId ) )
+			{
+				continue;
+			}
+			if ( resource.mesh != nullptr )
+			{
+				b3DestroyMesh( resource.mesh );
+			}
+			if ( resource.heightField != nullptr )
+			{
+				b3DestroyHeightField( resource.heightField );
+			}
+			ownedShapeResources.erase( ownedShapeResources.begin() + index - 1 );
+		}
 	}
 
 	void step( float timeStep, int subStepCount )
@@ -1311,7 +2121,7 @@ struct World
 				def.name = name.c_str();
 			}
 		}
-		Body body = { b3CreateBody( id, &def ) };
+		Body body = { b3CreateBody( id, &def ), this };
 		return body;
 	}
 
@@ -1480,21 +2290,114 @@ struct World
 
 	val castRayClosest( val origin, val translation, val filterOpts ) const
 	{
-		b3RayResult result = b3World_CastRayClosest( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ),
-													 queryFilterFromOpts( filterOpts ) );
+		ClosestRayCastContext context;
+		readTagArray( filterOpts, "excludeShapeUserData", &context.excludedShapeTags );
+		readTagArray( filterOpts, "excludeBodyUserData", &context.excludedBodyTags );
+		b3World_CastRay( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ), queryFilterFromOpts( filterOpts ),
+						 collectClosestRayHit, &context );
+
 		val o = val::object();
-		o.set( "hit", result.hit );
-		if ( result.hit )
+		o.set( "hit", context.hasHit );
+		if ( context.hasHit )
 		{
-			o.set( "point", fromVec3( result.point ) );
-			o.set( "normal", fromVec3( result.normal ) );
-			o.set( "fraction", result.fraction );
-			o.set( "shapeUserData", tagOf( b3Shape_GetUserData( result.shapeId ) ) );
-			o.set( "bodyUserData", tagOf( b3Body_GetUserData( b3Shape_GetBody( result.shapeId ) ) ) );
-			Shape shape = { result.shapeId };
+			const RayHit& hit = context.hit;
+			o.set( "point", fromVec3( hit.point ) );
+			o.set( "normal", fromVec3( hit.normal ) );
+			o.set( "fraction", hit.fraction );
+			o.set( "shapeUserData", tagOf( b3Shape_GetUserData( hit.shapeId ) ) );
+			o.set( "bodyUserData", tagOf( b3Body_GetUserData( b3Shape_GetBody( hit.shapeId ) ) ) );
+			o.set( "userMaterialId", (double)unpackMaterialId( hit.userMaterialId ) );
+			o.set( "triangleIndex", hit.triangleIndex );
+			o.set( "childIndex", hit.childIndex );
+			Shape shape = { hit.shapeId, const_cast<World*>( this ) };
 			o.set( "shape", val( shape ) );
 		}
 		return o;
+	}
+
+	val castRayClosestExcludingBody( val origin, val translation, double excludedBodyTag ) const
+	{
+		ClosestBodyExcludingRayCastContext context;
+		context.excludedBodyTag = (uintptr_t)excludedBodyTag;
+		b3World_CastRay( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ), b3DefaultQueryFilter(),
+						 collectClosestBodyExcludingRayHit, &context );
+
+		val out = val::array();
+		if ( context.hasHit )
+		{
+			const RayHit& hit = context.hit;
+			out.set( 0, hit.fraction );
+			out.set( 1, hit.normal.x );
+			out.set( 2, hit.normal.y );
+			out.set( 3, hit.normal.z );
+			out.set( 4, tagOf( b3Shape_GetUserData( hit.shapeId ) ) );
+			out.set( 5, hit.triangleIndex );
+		}
+		return out;
+	}
+
+	val castRayClosestExcludingBodyValues( float originX, float originY, float originZ, float translationX, float translationY,
+										   float translationZ, double excludedBodyTag )
+	{
+		ClosestBodyExcludingRayCastContext context;
+		context.excludedBodyTag = (uintptr_t)excludedBodyTag;
+		b3Vec3 origin = b3Vec3_zero;
+		origin.x = originX;
+		origin.y = originY;
+		origin.z = originZ;
+		b3Vec3 translation = b3Vec3_zero;
+		translation.x = translationX;
+		translation.y = translationY;
+		translation.z = translationZ;
+		b3World_CastRay( id, origin, translation, b3DefaultQueryFilter(), collectClosestBodyExcludingRayHit, &context );
+
+		closestRayResultBuffer[0] = -1.0;
+		if ( context.hasHit )
+		{
+			const RayHit& hit = context.hit;
+			closestRayResultBuffer = {
+				hit.fraction,
+				hit.normal.x,
+				hit.normal.y,
+				hit.normal.z,
+				tagOf( b3Shape_GetUserData( hit.shapeId ) ),
+				(double)hit.triangleIndex,
+			};
+		}
+		return val( emscripten::typed_memory_view( closestRayResultBuffer.size(), closestRayResultBuffer.data() ) );
+	}
+
+	val castRay( val origin, val translation, val filterOpts ) const
+	{
+		RayCastContext context;
+		readTagArray( filterOpts, "excludeShapeUserData", &context.excludedShapeTags );
+		readTagArray( filterOpts, "excludeBodyUserData", &context.excludedBodyTags );
+		b3World_CastRay( id, toVec3( origin, b3Vec3_zero ), toVec3( translation, b3Vec3_zero ), queryFilterFromOpts( filterOpts ),
+						 collectRayHit, &context );
+		std::sort( context.hits.begin(), context.hits.end(),
+				   []( const RayHit& a, const RayHit& b ) { return a.fraction < b.fraction; } );
+
+		int hitCount = (int)context.hits.size();
+		int maxHits = getInt( filterOpts, "maxHits", hitCount );
+		maxHits = std::max( 0, std::min( maxHits, hitCount ) );
+		val out = val::array();
+		for ( int hitIndex = 0; hitIndex < maxHits; ++hitIndex )
+		{
+			const RayHit& hit = context.hits[hitIndex];
+			val hitValue = val::object();
+			hitValue.set( "point", fromVec3( hit.point ) );
+			hitValue.set( "normal", fromVec3( hit.normal ) );
+			hitValue.set( "fraction", hit.fraction );
+			hitValue.set( "shapeUserData", tagOf( b3Shape_GetUserData( hit.shapeId ) ) );
+			hitValue.set( "bodyUserData", tagOf( b3Body_GetUserData( b3Shape_GetBody( hit.shapeId ) ) ) );
+			hitValue.set( "userMaterialId", (double)unpackMaterialId( hit.userMaterialId ) );
+			hitValue.set( "triangleIndex", hit.triangleIndex );
+			hitValue.set( "childIndex", hit.childIndex );
+			Shape shape = { hit.shapeId, const_cast<World*>( this ) };
+			hitValue.set( "shape", val( shape ) );
+			out.set( hitIndex, hitValue );
+		}
+		return out;
 	}
 
 	void explode( val opts )
@@ -1617,6 +2520,299 @@ struct World
 	}
 };
 
+static bool readVec3Array( const val& values, std::vector<b3Vec3>* output )
+{
+	if ( values.isUndefined() || values.isNull() || !hasKey( values, "length" ) )
+	{
+		return false;
+	}
+	int length = values["length"].as<int>();
+	if ( length == 0 )
+	{
+		return false;
+	}
+
+	bool flat = values[0].typeOf().as<std::string>() == "number";
+	if ( flat )
+	{
+		if ( length % 3 != 0 )
+		{
+			return false;
+		}
+		output->reserve( length / 3 );
+		for ( int index = 0; index < length; index += 3 )
+		{
+			output->push_back( { values[index].as<float>(), values[index + 1].as<float>(), values[index + 2].as<float>() } );
+		}
+	}
+	else
+	{
+		output->reserve( length );
+		for ( int index = 0; index < length; ++index )
+		{
+			output->push_back( toVec3( values[index], b3Vec3_zero ) );
+		}
+	}
+	return true;
+}
+
+static std::vector<b3SurfaceMaterial> materialsFromOpts( const val& opts, const b3SurfaceMaterial& fallback )
+{
+	std::vector<b3SurfaceMaterial> materials;
+	if ( !hasKey( opts, "materials" ) )
+	{
+		materials.push_back( fallback );
+		return materials;
+	}
+
+	val values = opts["materials"];
+	int count = values["length"].as<int>();
+	materials.reserve( count );
+	for ( int index = 0; index < count; ++index )
+	{
+		val value = values[index];
+		b3SurfaceMaterial material = fallback;
+		material.friction = getFloat( value, "friction", material.friction );
+		material.restitution = getFloat( value, "restitution", material.restitution );
+		material.rollingResistance = getFloat( value, "rollingResistance", material.rollingResistance );
+		material.tangentVelocity = getVec3( value, "tangentVelocity", material.tangentVelocity );
+		MaterialCombineRule frictionRule = hasKey( value, "frictionCombine" )
+											   ? materialCombineRuleFromOpts( value, "frictionCombine" )
+											   : unpackCombineRule( material.userMaterialId, frictionCombineShift );
+		MaterialCombineRule restitutionRule = hasKey( value, "restitutionCombine" )
+												  ? materialCombineRuleFromOpts( value, "restitutionCombine" )
+												  : unpackCombineRule( material.userMaterialId, restitutionCombineShift );
+		material.userMaterialId = packMaterialId( getU64( value, "userMaterialId", unpackMaterialId( material.userMaterialId ) ),
+												  frictionRule, restitutionRule );
+		materials.push_back( material );
+	}
+	if ( materials.empty() )
+	{
+		materials.push_back( fallback );
+	}
+	return materials;
+}
+
+void Shape::destroy( bool updateBodyMass )
+{
+	if ( !b3Shape_IsValid( id ) )
+	{
+		id = b3_nullShapeId;
+		owner = nullptr;
+		return;
+	}
+	b3ShapeId destroyedId = id;
+	b3DestroyShape( id, updateBodyMass );
+	id = b3_nullShapeId;
+	if ( owner != nullptr )
+	{
+		owner->releaseShapeResource( destroyedId );
+	}
+	owner = nullptr;
+}
+
+void Body::destroy()
+{
+	if ( !b3Body_IsValid( id ) )
+	{
+		id = b3_nullBodyId;
+		owner = nullptr;
+		return;
+	}
+	b3BodyId destroyedId = id;
+	b3DestroyBody( id );
+	id = b3_nullBodyId;
+	if ( owner != nullptr )
+	{
+		owner->releaseBodyResources( destroyedId );
+	}
+	owner = nullptr;
+}
+
+Shape Body::createMesh( val opts )
+{
+	Shape invalid = { b3_nullShapeId, owner };
+	if ( b3Body_GetType( id ) != b3_staticBody || owner == nullptr || !hasKey( opts, "vertices" ) || !hasKey( opts, "indices" ) )
+	{
+		return invalid;
+	}
+
+	std::vector<b3Vec3> vertices;
+	if ( !readVec3Array( opts["vertices"], &vertices ) || vertices.size() < 3 )
+	{
+		return invalid;
+	}
+
+	val indexValues = opts["indices"];
+	int indexCount = indexValues["length"].as<int>();
+	if ( indexCount < 3 || indexCount % 3 != 0 )
+	{
+		return invalid;
+	}
+	std::vector<int32_t> indices;
+	indices.reserve( indexCount );
+	for ( int index = 0; index < indexCount; ++index )
+	{
+		int32_t vertexIndex = indexValues[index].as<int32_t>();
+		if ( vertexIndex < 0 || vertexIndex >= (int32_t)vertices.size() )
+		{
+			return invalid;
+		}
+		indices.push_back( vertexIndex );
+	}
+
+	int triangleCount = indexCount / 3;
+	std::vector<uint8_t> materialIndices;
+	if ( hasKey( opts, "materialIndices" ) )
+	{
+		val materialValues = opts["materialIndices"];
+		if ( materialValues["length"].as<int>() != triangleCount )
+		{
+			return invalid;
+		}
+		materialIndices.reserve( triangleCount );
+		for ( int index = 0; index < triangleCount; ++index )
+		{
+			int materialIndex = materialValues[index].as<int>();
+			if ( materialIndex < 0 || materialIndex > UINT8_MAX )
+			{
+				return invalid;
+			}
+			materialIndices.push_back( (uint8_t)materialIndex );
+		}
+	}
+
+	b3MeshDef meshDef = {};
+	meshDef.vertices = vertices.data();
+	meshDef.indices = indices.data();
+	meshDef.materialIndices = materialIndices.empty() ? nullptr : materialIndices.data();
+	meshDef.weldTolerance = getFloat( opts, "weldTolerance", 0.001f );
+	meshDef.vertexCount = (int)vertices.size();
+	meshDef.triangleCount = triangleCount;
+	meshDef.weldVertices = getBool( opts, "weldVertices", false );
+	meshDef.useMedianSplit = getBool( opts, "useMedianSplit", false );
+	meshDef.identifyEdges = getBool( opts, "identifyEdges", true );
+	b3MeshData* mesh = b3CreateMesh( &meshDef, nullptr, 0 );
+	if ( mesh == nullptr )
+	{
+		return invalid;
+	}
+
+	b3ShapeDef shapeDef = shapeDefFromOpts( opts );
+	std::vector<b3SurfaceMaterial> materials = materialsFromOpts( opts, shapeDef.baseMaterial );
+	if ( !materialIndices.empty() && *std::max_element( materialIndices.begin(), materialIndices.end() ) >= materials.size() )
+	{
+		b3DestroyMesh( mesh );
+		return invalid;
+	}
+	shapeDef.materials = materials.data();
+	shapeDef.materialCount = (int)materials.size();
+	b3Vec3 scale = getVec3( opts, "scale", b3Vec3_one );
+	b3ShapeId shapeId = b3CreateMeshShape( id, &shapeDef, mesh, scale );
+	if ( !b3Shape_IsValid( shapeId ) )
+	{
+		b3DestroyMesh( mesh );
+		return invalid;
+	}
+	owner->ownMesh( shapeId, id, mesh );
+	return { shapeId, owner };
+}
+
+Shape Body::createHeightField( val opts )
+{
+	Shape invalid = { b3_nullShapeId, owner };
+	if ( b3Body_GetType( id ) != b3_staticBody || owner == nullptr || !hasKey( opts, "heights" ) )
+	{
+		return invalid;
+	}
+
+	int countX = getInt( opts, "countX", 0 );
+	int countZ = getInt( opts, "countZ", 0 );
+	if ( countX < 2 || countZ < 2 )
+	{
+		return invalid;
+	}
+	int heightCount = countX * countZ;
+	val heightValues = opts["heights"];
+	if ( heightValues["length"].as<int>() != heightCount )
+	{
+		return invalid;
+	}
+	std::vector<float> heights;
+	heights.reserve( heightCount );
+	float minimumHeight = std::numeric_limits<float>::max();
+	float maximumHeight = std::numeric_limits<float>::lowest();
+	for ( int index = 0; index < heightCount; ++index )
+	{
+		float height = heightValues[index].as<float>();
+		heights.push_back( height );
+		minimumHeight = b3MinFloat( minimumHeight, height );
+		maximumHeight = b3MaxFloat( maximumHeight, height );
+	}
+
+	int cellCount = ( countX - 1 ) * ( countZ - 1 );
+	std::vector<uint8_t> materialIndices;
+	if ( hasKey( opts, "materialIndices" ) )
+	{
+		val materialValues = opts["materialIndices"];
+		if ( materialValues["length"].as<int>() != cellCount )
+		{
+			return invalid;
+		}
+		materialIndices.reserve( cellCount );
+		for ( int index = 0; index < cellCount; ++index )
+		{
+			int materialIndex = materialValues[index].as<int>();
+			if ( materialIndex < 0 || materialIndex > UINT8_MAX )
+			{
+				return invalid;
+			}
+			materialIndices.push_back( (uint8_t)materialIndex );
+		}
+	}
+
+	b3HeightFieldDef heightFieldDef = {};
+	heightFieldDef.heights = heights.data();
+	heightFieldDef.materialIndices = materialIndices.empty() ? nullptr : materialIndices.data();
+	heightFieldDef.scale = getVec3( opts, "scale", b3Vec3_one );
+	heightFieldDef.countX = countX;
+	heightFieldDef.countZ = countZ;
+	heightFieldDef.globalMinimumHeight = getFloat( opts, "globalMinimumHeight", minimumHeight );
+	heightFieldDef.globalMaximumHeight = getFloat( opts, "globalMaximumHeight", maximumHeight );
+	heightFieldDef.clockwiseWinding = getBool( opts, "clockwiseWinding", false );
+	if ( heightFieldDef.globalMinimumHeight > heightFieldDef.globalMaximumHeight || heightFieldDef.scale.x <= 0.0f ||
+		 heightFieldDef.scale.y <= 0.0f || heightFieldDef.scale.z <= 0.0f )
+	{
+		return invalid;
+	}
+	b3HeightFieldData* heightField = b3CreateHeightField( &heightFieldDef );
+	if ( heightField == nullptr )
+	{
+		return invalid;
+	}
+
+	b3ShapeDef shapeDef = shapeDefFromOpts( opts );
+	std::vector<b3SurfaceMaterial> materials = materialsFromOpts( opts, shapeDef.baseMaterial );
+	for ( uint8_t materialIndex : materialIndices )
+	{
+		if ( materialIndex != B3_HEIGHT_FIELD_HOLE && materialIndex >= materials.size() )
+		{
+			b3DestroyHeightField( heightField );
+			return invalid;
+		}
+	}
+	shapeDef.materials = materials.data();
+	shapeDef.materialCount = (int)materials.size();
+	b3ShapeId shapeId = b3CreateHeightFieldShape( id, &shapeDef, heightField );
+	if ( !b3Shape_IsValid( shapeId ) )
+	{
+		b3DestroyHeightField( heightField );
+		return invalid;
+	}
+	owner->ownHeightField( shapeId, id, heightField );
+	return { shapeId, owner };
+}
+
 // ---------------------------------------------------------------------------
 // Bindings
 // ---------------------------------------------------------------------------
@@ -1644,6 +2840,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "enableContinuous", &World::enableContinuous )
 		.function( "getAwakeBodyCount", &World::getAwakeBodyCount )
 		.function( "getWorkerCount", &World::getWorkerCount )
+		.function( "setMaterialCallbacks", &World::setMaterialCallbacks )
 		.function( "createBody", &World::createBody )
 		.function( "createDistanceJoint", &World::createDistanceJoint )
 		.function( "createRevoluteJoint", &World::createRevoluteJoint )
@@ -1655,6 +2852,9 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "createParallelJoint", &World::createParallelJoint )
 		.function( "createFilterJoint", &World::createFilterJoint )
 		.function( "castRayClosest", &World::castRayClosest )
+		.function( "castRayClosestExcludingBody", &World::castRayClosestExcludingBody )
+		.function( "castRayClosestExcludingBodyValues", &World::castRayClosestExcludingBodyValues )
+		.function( "castRay", &World::castRay )
 		.function( "explode", &World::explode )
 		.function( "getBodyEvents", &World::getBodyEvents )
 		.function( "getContactEvents", &World::getContactEvents )
@@ -1679,18 +2879,25 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setLinearVelocity", &Body::setLinearVelocity )
 		.function( "getAngularVelocity", &Body::getAngularVelocity )
 		.function( "setAngularVelocity", &Body::setAngularVelocity )
+		.function( "setVelocities", &Body::setVelocities )
+		.function( "getMotionState", &Body::getMotionState )
+		.function( "getMotionStateBuffer", &Body::getMotionStateBuffer )
+		.function( "setVelocitiesValues", &Body::setVelocitiesValues )
 		.function( "applyForce", &Body::applyForce )
 		.function( "applyForceToCenter", &Body::applyForceToCenter )
 		.function( "applyTorque", &Body::applyTorque )
 		.function( "applyLinearImpulse", &Body::applyLinearImpulse )
 		.function( "applyLinearImpulseToCenter", &Body::applyLinearImpulseToCenter )
 		.function( "applyAngularImpulse", &Body::applyAngularImpulse )
+		.function( "applyImpulseBatch", &Body::applyImpulseBatch )
 		.function( "getMass", &Body::getMass )
 		.function( "applyMassFromShapes", &Body::applyMassFromShapes )
 		.function( "getLocalCenterOfMass", &Body::getLocalCenterOfMass )
 		.function( "getWorldCenterOfMass", &Body::getWorldCenterOfMass )
 		.function( "getLocalPoint", &Body::getLocalPoint )
 		.function( "getWorldPoint", &Body::getWorldPoint )
+		.function( "getWorldPointVelocity", &Body::getWorldPointVelocity )
+		.function( "getWorldInverseRotationalInertia", &Body::getWorldInverseRotationalInertia )
 		.function( "getLinearDamping", &Body::getLinearDamping )
 		.function( "setLinearDamping", &Body::setLinearDamping )
 		.function( "getAngularDamping", &Body::getAngularDamping )
@@ -1708,10 +2915,14 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "getMotionLocks", &Body::getMotionLocks )
 		.function( "getShapeCount", &Body::getShapeCount )
 		.function( "computeAABB", &Body::computeAABB )
+		.function( "getContactData", &Body::getContactData )
 		.function( "createSphere", &Body::createSphere )
 		.function( "createCapsule", &Body::createCapsule )
 		.function( "createBox", &Body::createBox )
-		.function( "createHull", &Body::createHull );
+		.function( "createCylinder", &Body::createCylinder )
+		.function( "createHull", &Body::createHull )
+		.function( "createMesh", &Body::createMesh )
+		.function( "createHeightField", &Body::createHeightField );
 
 	class_<Shape>( "Shape" )
 		.function( "isValid", &Shape::isValid )
@@ -1725,6 +2936,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setRestitution", &Shape::setRestitution )
 		.function( "getDensity", &Shape::getDensity )
 		.function( "setDensity", &Shape::setDensity )
+		.function( "computeMassData", &Shape::computeMassData )
 		.function( "isSensor", &Shape::isSensor )
 		.function( "enableSensorEvents", &Shape::enableSensorEvents )
 		.function( "enableContactEvents", &Shape::enableContactEvents )
@@ -1732,6 +2944,9 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "getFilter", &Shape::getFilter )
 		.function( "setFilter", &Shape::setFilter )
 		.function( "getAABB", &Shape::getAABB )
+		.function( "getClosestPoint", &Shape::getClosestPoint )
+		.function( "containsPoint", &Shape::containsPoint )
+		.function( "contactBox", &Shape::contactBox )
 		.function( "rayCast", &Shape::rayCast );
 
 	class_<Joint>( "Joint" )

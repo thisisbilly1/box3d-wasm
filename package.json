@@ -3,16 +3,30 @@
   "version": "0.2.0",
   "description": "Box3D, Erin Catto's 3D physics engine, compiled to WebAssembly with SIMD and optional wasm threads. Isomorphic: works in browsers and Node.js, auto-detecting thread support.",
   "type": "module",
+  "types": "./types/index.d.ts",
   "main": "dist/entry.mjs",
   "exports": {
-    ".": "./dist/entry.mjs",
-    "./standard": "./dist/box3d.mjs",
-    "./deluxe": "./dist/box3d.deluxe.mjs",
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/entry.mjs"
+    },
+    "./standard": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/box3d.mjs"
+    },
+    "./deluxe": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/box3d.deluxe.mjs"
+    },
     "./package.json": "./package.json",
-    "./iso": "./dist/iso.mjs"
+    "./iso": {
+      "types": "./types/iso.d.ts",
+      "default": "./dist/iso.mjs"
+    }
   },
   "files": [
     "dist",
+    "types",
     "README.md",
     "LICENSE",
     "LICENSE.box3d.txt"
@@ -24,8 +38,9 @@
     "fetch-deps": "bash scripts/fetch-deps.sh",
     "build": "bash scripts/build.sh",
     "build:debug": "TARGET_TYPE=Debug bash scripts/build.sh",
-    "test": "node --test \"test/*.test.mjs\"",
-    "prepublishOnly": "node --test \"test/*.test.mjs\"",
+    "test": "node --test \"test/*.test.mjs\" && npm run test:types",
+    "test:types": "tsc --noEmit -p test/tsconfig.json",
+    "prepublishOnly": "npm test",
     "lint": "eslint .",
     "lint:native": "clang-format --dry-run --Werror csrc/*.cpp"
   },
