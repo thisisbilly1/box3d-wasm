@@ -308,6 +308,12 @@ test('shapes expose closest-point and signed box-contact queries', () => {
   });
   assert.equal(volume.containsPoint({ x: 10.1, y: 2.1, z: -3.9 }), true);
   assert.equal(volume.containsPoint({ x: 11, y: 3, z: -3 }), false);
+  const embeddedContact = volume.contactBox({
+    center: { x: 10.1, y: 2.1, z: -3.9 },
+    halfExtents: { x: 0.2, y: 0.2, z: 0.2 },
+  });
+  assert.ok(embeddedContact);
+  assert.ok(embeddedContact.distance < -0.05);
 
   world.destroy();
   world.delete();

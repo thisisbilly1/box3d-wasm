@@ -359,6 +359,15 @@ static bool collectMeshBoxContact( b3Vec3 a, b3Vec3 b, b3Vec3 c, int triangleInd
 	b3SATCache cache = {};
 	const uint8_t* flags = b3GetMeshFlags( context->mesh->data );
 	b3CollideHullAndTriangle( &manifold, 4, context->boxHull, a, b, c, flags ? flags[triangleIndex] : 0, &cache );
+	if ( manifold.pointCount == 0 )
+	{
+		// Production pose validation must also recover boxes submitted from the
+		// back side of a closed mesh surface. Box3D's simulation contact is
+		// intentionally one-sided, so retry the isolated query with reversed
+		// winding; this does not change the world's normal collision behavior.
+		cache = {};
+		b3CollideHullAndTriangle( &manifold, 4, context->boxHull, a, c, b, 0, &cache );
+	}
 	considerBoxContact( context, manifold );
 	return true;
 }
