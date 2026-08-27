@@ -263,6 +263,45 @@ test('triangle meshes collide and release resources with their shape or body', (
   world.delete();
 });
 
+test('shapes expose closest-point and signed box-contact queries', () => {
+  const world = new b3.World({ gravity: { x: 0, y: 0, z: 0 } });
+  const boxBody = world.createBody({ type: 'static' });
+  const box = boxBody.createBox({ halfExtents: { x: 1, y: 1, z: 1 } });
+
+  const boxContact = box.contactBox({
+    center: { x: 1.25, y: 0, z: 0 },
+    halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
+  });
+  assert.ok(boxContact);
+  assert.ok(Math.abs(boxContact.distance + 0.25) < 1e-4, `unexpected hull separation ${boxContact.distance}`);
+  assert.ok(boxContact.normal.x > 0.99, `unexpected hull normal ${JSON.stringify(boxContact.normal)}`);
+  assert.equal(box.contactBox({
+    center: { x: 3, y: 0, z: 0 },
+    halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
+  }), null);
+
+  const meshBody = world.createBody({ type: 'static', position: { x: 0, y: 2, z: 0 } });
+  const mesh = meshBody.createMesh({
+    vertices: new Float32Array([-5, 0, -5, -5, 0, 5, 5, 0, 5, 5, 0, -5]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    identifyEdges: true,
+  });
+  const closest = mesh.getClosestPoint({ x: 1, y: 5, z: -1 });
+  assert.ok(Math.abs(closest.x - 1) < 1e-5);
+  assert.ok(Math.abs(closest.y - 2) < 1e-5);
+  assert.ok(Math.abs(closest.z + 1) < 1e-5);
+  const meshContact = mesh.contactBox({
+    center: { x: 0, y: 2.25, z: 0 },
+    halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
+  });
+  assert.ok(meshContact);
+  assert.ok(Math.abs(meshContact.distance + 0.25) < 1e-4, `unexpected mesh separation ${meshContact.distance}`);
+  assert.ok(meshContact.normal.y > 0.99, `unexpected mesh normal ${JSON.stringify(meshContact.normal)}`);
+
+  world.destroy();
+  world.delete();
+});
+
 test('height fields collide, support holes, and validate their dimensions', () => {
   const world = new b3.World({ gravity: { x: 0, y: -10, z: 0 } });
   const terrain = world.createBody({ type: 'static' });

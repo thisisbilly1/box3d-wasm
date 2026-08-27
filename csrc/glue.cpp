@@ -319,6 +319,100 @@ static b3ShapeDef shapeDefFromOpts( const val& o )
 
 struct World;
 
+struct BoxContactContext
+{
+	const b3Mesh* mesh;
+	const b3HullData* boxHull;
+	b3Vec3 boxCenter;
+	float separation;
+	b3Vec3 normal;
+	bool hit;
+};
+
+static void considerBoxContact( BoxContactContext* context, const b3LocalManifold& manifold )
+{
+	for ( int i = 0; i < manifold.pointCount; ++i )
+	{
+		const b3LocalManifoldPoint& point = manifold.points[i];
+		if ( context->hit && point.separation >= context->separation )
+		{
+			continue;
+		}
+
+		b3Vec3 normal = manifold.normal;
+		if ( b3Dot( normal, b3Sub( context->boxCenter, point.point ) ) < 0.0f )
+		{
+			normal = b3Neg( normal );
+		}
+		context->separation = point.separation;
+		context->normal = normal;
+		context->hit = true;
+	}
+}
+
+static bool collectMeshBoxContact( b3Vec3 a, b3Vec3 b, b3Vec3 c, int triangleIndex, void* rawContext )
+{
+	BoxContactContext* context = static_cast<BoxContactContext*>( rawContext );
+	b3LocalManifoldPoint points[4] = {};
+	b3LocalManifold manifold = {};
+	manifold.points = points;
+	b3SATCache cache = {};
+	const uint8_t* flags = b3GetMeshFlags( context->mesh->data );
+	b3CollideHullAndTriangle( &manifold, 4, context->boxHull, a, b, c, flags ? flags[triangleIndex] : 0, &cache );
+	considerBoxContact( context, manifold );
+	return true;
+}
+
+static b3Vec3 closestPointOnTriangle( b3Vec3 point, b3Vec3 a, b3Vec3 b, b3Vec3 c )
+{
+	b3Vec3 ab = b3Sub( b, a );
+	b3Vec3 ac = b3Sub( c, a );
+	b3Vec3 ap = b3Sub( point, a );
+	float d1 = b3Dot( ab, ap );
+	float d2 = b3Dot( ac, ap );
+	if ( d1 <= 0.0f && d2 <= 0.0f )
+	{
+		return a;
+	}
+
+	b3Vec3 bp = b3Sub( point, b );
+	float d3 = b3Dot( ab, bp );
+	float d4 = b3Dot( ac, bp );
+	if ( d3 >= 0.0f && d4 <= d3 )
+	{
+		return b;
+	}
+
+	float vc = d1 * d4 - d3 * d2;
+	if ( vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f )
+	{
+		return b3MulAdd( a, d1 / ( d1 - d3 ), ab );
+	}
+
+	b3Vec3 cp = b3Sub( point, c );
+	float d5 = b3Dot( ab, cp );
+	float d6 = b3Dot( ac, cp );
+	if ( d6 >= 0.0f && d5 <= d6 )
+	{
+		return c;
+	}
+
+	float vb = d5 * d2 - d1 * d6;
+	if ( vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f )
+	{
+		return b3MulAdd( a, d2 / ( d2 - d6 ), ac );
+	}
+
+	float va = d3 * d6 - d5 * d4;
+	if ( va <= 0.0f && d4 - d3 >= 0.0f && d5 - d6 >= 0.0f )
+	{
+		return b3MulAdd( b, ( d4 - d3 ) / ( ( d4 - d3 ) + ( d5 - d6 ) ), b3Sub( c, b ) );
+	}
+
+	float denominator = 1.0f / ( va + vb + vc );
+	return b3Add( a, b3Add( b3MulSV( vb * denominator, ab ), b3MulSV( vc * denominator, ac ) ) );
+}
+
 struct Shape
 {
 	b3ShapeId id;
@@ -448,6 +542,106 @@ struct Shape
 		o.set( "lowerBound", fromVec3( aabb.lowerBound ) );
 		o.set( "upperBound", fromVec3( aabb.upperBound ) );
 		return o;
+	}
+
+	val getClosestPoint( val target ) const
+	{
+		b3Vec3 worldTarget = toVec3( target, b3Vec3_zero );
+		if ( b3Shape_GetType( id ) != b3_meshShape )
+		{
+			return fromVec3( b3Shape_GetClosestPoint( id, worldTarget ) );
+		}
+
+		b3BodyId bodyId = b3Shape_GetBody( id );
+		b3Transform shapeTransform = {
+			.p = b3Body_GetPosition( bodyId ),
+			.q = b3Body_GetRotation( bodyId ),
+		};
+		b3Vec3 localTarget = b3InvTransformPoint( shapeTransform, worldTarget );
+		b3Mesh mesh = b3Shape_GetMesh( id );
+		const b3Vec3* vertices = b3GetMeshVertices( mesh.data );
+		const b3MeshTriangle* triangles = b3GetMeshTriangles( mesh.data );
+		b3Vec3 closest = b3Vec3_zero;
+		float closestDistanceSquared = std::numeric_limits<float>::max();
+		for ( int i = 0; i < mesh.data->triangleCount; ++i )
+		{
+			const b3MeshTriangle& triangle = triangles[i];
+			b3Vec3 a = b3Mul( vertices[triangle.index1], mesh.scale );
+			b3Vec3 b = b3Mul( vertices[triangle.index2], mesh.scale );
+			b3Vec3 c = b3Mul( vertices[triangle.index3], mesh.scale );
+			b3Vec3 candidate = closestPointOnTriangle( localTarget, a, b, c );
+			float distanceSquared = b3DistanceSquared( candidate, localTarget );
+			if ( distanceSquared < closestDistanceSquared )
+			{
+				closestDistanceSquared = distanceSquared;
+				closest = candidate;
+			}
+		}
+		return fromVec3( b3TransformPoint( shapeTransform, closest ) );
+	}
+
+	val contactBox( val opts ) const
+	{
+		val none = val::null();
+		if ( !b3Shape_IsValid( id ) )
+		{
+			return none;
+		}
+
+		b3Vec3 halfExtents = getVec3( opts, "halfExtents", { 0.5f, 0.5f, 0.5f } );
+		if ( halfExtents.x <= 0.0f || halfExtents.y <= 0.0f || halfExtents.z <= 0.0f )
+		{
+			return none;
+		}
+
+		b3Transform boxTransform = b3Transform_identity;
+		boxTransform.p = getVec3( opts, "center", b3Vec3_zero );
+		boxTransform.q = getQuat( opts, "rotation", b3Quat_identity );
+		b3BodyId bodyId = b3Shape_GetBody( id );
+		b3Transform shapeTransform = {
+			.p = b3Body_GetPosition( bodyId ),
+			.q = b3Body_GetRotation( bodyId ),
+		};
+		b3Transform boxToShape = b3InvMulTransforms( shapeTransform, boxTransform );
+		BoxContactContext context = {
+			.mesh = nullptr,
+			.boxHull = nullptr,
+			.boxCenter = boxToShape.p,
+			.separation = std::numeric_limits<float>::max(),
+			.normal = b3Vec3_zero,
+			.hit = false,
+		};
+
+		b3ShapeType type = b3Shape_GetType( id );
+		if ( type == b3_hullShape )
+		{
+			b3BoxHull box = b3MakeBoxHull( halfExtents.x, halfExtents.y, halfExtents.z );
+			b3LocalManifoldPoint points[8] = {};
+			b3LocalManifold manifold = {};
+			manifold.points = points;
+			b3SATCache cache = {};
+			b3CollideHulls( &manifold, 8, b3Shape_GetHull( id ), &box.base, boxToShape, &cache );
+			considerBoxContact( &context, manifold );
+		}
+		else if ( type == b3_meshShape )
+		{
+			b3Mesh mesh = b3Shape_GetMesh( id );
+			b3BoxHull box = b3MakeTransformedBoxHull( halfExtents.x, halfExtents.y, halfExtents.z, boxToShape );
+			context.mesh = &mesh;
+			context.boxHull = &box.base;
+			b3AABB bounds = b3ComputeHullAABB( &box.base, b3Transform_identity );
+			b3QueryMesh( &mesh, bounds, collectMeshBoxContact, &context );
+		}
+
+		if ( !context.hit )
+		{
+			return none;
+		}
+
+		val result = val::object();
+		result.set( "distance", context.separation );
+		result.set( "normal", fromVec3( b3RotateVector( shapeTransform.q, context.normal ) ) );
+		return result;
 	}
 
 	val rayCast( val origin, val translation ) const
@@ -2429,6 +2623,8 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "getFilter", &Shape::getFilter )
 		.function( "setFilter", &Shape::setFilter )
 		.function( "getAABB", &Shape::getAABB )
+		.function( "getClosestPoint", &Shape::getClosestPoint )
+		.function( "contactBox", &Shape::contactBox )
 		.function( "rayCast", &Shape::rayCast );
 
 	class_<Joint>( "Joint" )

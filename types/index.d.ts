@@ -204,6 +204,17 @@ export interface ShapeMassData {
   inertia: Matrix3;
 }
 
+export interface BoxContactOptions {
+  center: Vec3;
+  rotation?: Quat;
+  halfExtents: Vec3;
+}
+
+export interface ShapeContact {
+  distance: number;
+  normal: Vec3;
+}
+
 export interface Shape extends EmbindHandle {
   isValid(): boolean;
   destroy(updateBodyMass: boolean): void;
@@ -224,6 +235,8 @@ export interface Shape extends EmbindHandle {
   getFilter(): Required<CollisionFilter>;
   setFilter(filter: CollisionFilter): void;
   getAABB(): AABB;
+  getClosestPoint(target: Vec3): Vec3;
+  contactBox(options: BoxContactOptions): ShapeContact | null;
   rayCast(origin: Vec3, translation: Vec3): { hit: false } | { hit: true; point: Vec3; normal: Vec3; fraction: number };
 }
 

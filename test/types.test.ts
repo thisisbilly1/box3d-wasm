@@ -27,7 +27,7 @@ async function exerciseDeclarations() {
     indices: new Uint32Array([0, 1, 2]),
     identifyEdges: true,
   };
-  terrain.createMesh(meshOptions);
+  const mesh = terrain.createMesh(meshOptions);
 
   const body = world.createBody({ type: 'dynamic', userData: 2 });
   const box = body.createBox({ halfExtents: { x: 1, y: 1, z: 1 }, density: 1 });
@@ -45,6 +45,11 @@ async function exerciseDeclarations() {
   const velocity: Vec3 = body.getWorldPointVelocity({ x: 1, y: 0, z: 0 });
   const inertia: Matrix3 = body.getWorldInverseRotationalInertia();
   const contacts: ContactData[] = body.getContactData();
+  const closest = mesh.getClosestPoint({ x: 0, y: 2, z: 0 });
+  const boxContact = mesh.contactBox({
+    center: { x: 0, y: 0, z: 0 },
+    halfExtents: { x: 1, y: 1, z: 1 },
+  });
   const hits: RayHit[] = world.castRay(
     { x: 0, y: 10, z: 0 },
     { x: 0, y: -20, z: 0 },
@@ -54,7 +59,7 @@ async function exerciseDeclarations() {
   const standard = await StandardBox3D();
   const deluxe = await DeluxeBox3D();
   const iso = await IsoBox3D();
-  return { contacts, deluxe, hits, inertia, iso, standard, velocity };
+  return { boxContact, closest, contacts, deluxe, hits, inertia, iso, standard, velocity };
 }
 
 void exerciseDeclarations;

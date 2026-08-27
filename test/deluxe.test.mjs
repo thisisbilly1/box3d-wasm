@@ -93,6 +93,15 @@ test('production collision and query bindings work in a threaded world', () => {
     frictionCombine: 'min',
   });
   assert.ok(mesh.isValid());
+  const closest = mesh.getClosestPoint({ x: 1, y: 3, z: -1 });
+  assert.ok(Math.abs(closest.y) < 1e-5);
+  const meshContact = mesh.contactBox({
+    center: { x: 0, y: 0.25, z: 0 },
+    halfExtents: { x: 0.5, y: 0.5, z: 0.5 },
+  });
+  assert.ok(meshContact);
+  assert.ok(Math.abs(meshContact.distance + 0.25) < 1e-4);
+  assert.ok(meshContact.normal.y > 0.99);
 
   const heightTerrain = world.createBody({ type: 'static', position: { x: 10, y: 0, z: 0 } });
   const heightField = heightTerrain.createHeightField({
