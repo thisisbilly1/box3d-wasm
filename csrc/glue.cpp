@@ -13,6 +13,7 @@
 //   arrays can be correlated back to application objects.
 
 #include <algorithm>
+#include <array>
 #include <box3d/box3d.h>
 #include <cmath>
 #include <cstdint>
@@ -1191,6 +1192,7 @@ struct Body
 {
 	b3BodyId id;
 	World* owner;
+	std::array<float, 27> motionStateBuffer = {};
 
 	bool isValid() const
 	{
@@ -1306,6 +1308,46 @@ struct Body
 		return state;
 	}
 
+	val getMotionStateBuffer()
+	{
+		const b3Vec3 position = b3Body_GetPosition( id );
+		const b3Quat rotation = b3Body_GetRotation( id );
+		const b3Vec3 linearVelocity = b3Body_GetLinearVelocity( id );
+		const b3Vec3 angularVelocity = b3Body_GetAngularVelocity( id );
+		const b3Vec3 worldCenterOfMass = b3Body_GetWorldCenterOfMass( id );
+		const b3Matrix3 inverseInertia = b3Body_GetWorldInverseRotationalInertia( id );
+		motionStateBuffer = {
+			position.x,
+			position.y,
+			position.z,
+			rotation.v.x,
+			rotation.v.y,
+			rotation.v.z,
+			rotation.s,
+			linearVelocity.x,
+			linearVelocity.y,
+			linearVelocity.z,
+			angularVelocity.x,
+			angularVelocity.y,
+			angularVelocity.z,
+			worldCenterOfMass.x,
+			worldCenterOfMass.y,
+			worldCenterOfMass.z,
+			inverseInertia.cx.x,
+			inverseInertia.cx.y,
+			inverseInertia.cx.z,
+			inverseInertia.cy.x,
+			inverseInertia.cy.y,
+			inverseInertia.cy.z,
+			inverseInertia.cz.x,
+			inverseInertia.cz.y,
+			inverseInertia.cz.z,
+			b3Body_GetInverseMass( id ),
+			b3Body_GetGravityScale( id ),
+		};
+		return val( emscripten::typed_memory_view( motionStateBuffer.size(), motionStateBuffer.data() ) );
+	}
+
 	void setAngularVelocity( val v )
 	{
 		b3Body_SetAngularVelocity( id, toVec3( v, b3Vec3_zero ) );
@@ -1315,6 +1357,20 @@ struct Body
 	{
 		b3Body_SetLinearVelocity( id, toVec3( linearVelocity, b3Vec3_zero ) );
 		b3Body_SetAngularVelocity( id, toVec3( angularVelocity, b3Vec3_zero ) );
+	}
+
+	void setVelocitiesValues( float linearX, float linearY, float linearZ, float angularX, float angularY, float angularZ )
+	{
+		b3Vec3 linearVelocity = b3Vec3_zero;
+		linearVelocity.x = linearX;
+		linearVelocity.y = linearY;
+		linearVelocity.z = linearZ;
+		b3Vec3 angularVelocity = b3Vec3_zero;
+		angularVelocity.x = angularX;
+		angularVelocity.y = angularY;
+		angularVelocity.z = angularZ;
+		b3Body_SetLinearVelocity( id, linearVelocity );
+		b3Body_SetAngularVelocity( id, angularVelocity );
 	}
 
 	void applyForce( val force, val point, bool wake )
@@ -1846,6 +1902,7 @@ struct World
 
 	b3WorldId id;
 	std::vector<OwnedShapeResource> ownedShapeResources;
+	std::array<double, 6> closestRayResultBuffer = {};
 
 	World()
 		: World( val::undefined() )
@@ -2277,6 +2334,37 @@ struct World
 			out.set( 5, hit.triangleIndex );
 		}
 		return out;
+	}
+
+	val castRayClosestExcludingBodyValues( float originX, float originY, float originZ, float translationX, float translationY,
+										   float translationZ, double excludedBodyTag )
+	{
+		ClosestBodyExcludingRayCastContext context;
+		context.excludedBodyTag = (uintptr_t)excludedBodyTag;
+		b3Vec3 origin = b3Vec3_zero;
+		origin.x = originX;
+		origin.y = originY;
+		origin.z = originZ;
+		b3Vec3 translation = b3Vec3_zero;
+		translation.x = translationX;
+		translation.y = translationY;
+		translation.z = translationZ;
+		b3World_CastRay( id, origin, translation, b3DefaultQueryFilter(), collectClosestBodyExcludingRayHit, &context );
+
+		closestRayResultBuffer[0] = -1.0;
+		if ( context.hasHit )
+		{
+			const RayHit& hit = context.hit;
+			closestRayResultBuffer = {
+				hit.fraction,
+				hit.normal.x,
+				hit.normal.y,
+				hit.normal.z,
+				tagOf( b3Shape_GetUserData( hit.shapeId ) ),
+				(double)hit.triangleIndex,
+			};
+		}
+		return val( emscripten::typed_memory_view( closestRayResultBuffer.size(), closestRayResultBuffer.data() ) );
 	}
 
 	val castRay( val origin, val translation, val filterOpts ) const
@@ -2765,6 +2853,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "createFilterJoint", &World::createFilterJoint )
 		.function( "castRayClosest", &World::castRayClosest )
 		.function( "castRayClosestExcludingBody", &World::castRayClosestExcludingBody )
+		.function( "castRayClosestExcludingBodyValues", &World::castRayClosestExcludingBodyValues )
 		.function( "castRay", &World::castRay )
 		.function( "explode", &World::explode )
 		.function( "getBodyEvents", &World::getBodyEvents )
@@ -2792,6 +2881,8 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setAngularVelocity", &Body::setAngularVelocity )
 		.function( "setVelocities", &Body::setVelocities )
 		.function( "getMotionState", &Body::getMotionState )
+		.function( "getMotionStateBuffer", &Body::getMotionStateBuffer )
+		.function( "setVelocitiesValues", &Body::setVelocitiesValues )
 		.function( "applyForce", &Body::applyForce )
 		.function( "applyForceToCenter", &Body::applyForceToCenter )
 		.function( "applyTorque", &Body::applyTorque )

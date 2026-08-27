@@ -272,6 +272,9 @@ export interface Body extends EmbindHandle {
   setAngularVelocity(value: Vec3): void;
   setVelocities(linearVelocity: Vec3, angularVelocity: Vec3): void;
   getMotionState(): BodyMotionState;
+  /** Reused flat view: position 0-2, rotation 3-6, velocities 7-12, COM 13-15, inverse inertia 16-24, inverse mass 25, gravity scale 26. */
+  getMotionStateBuffer(): Float32Array;
+  setVelocitiesValues(linearX: number, linearY: number, linearZ: number, angularX: number, angularY: number, angularZ: number): void;
   applyForce(force: Vec3, worldPoint: Vec3, wake: boolean): void;
   applyForceToCenter(force: Vec3, wake: boolean): void;
   applyTorque(torque: Vec3, wake: boolean): void;
@@ -612,6 +615,8 @@ export interface World extends EmbindHandle {
   castRayClosest(origin: Vec3, translation: Vec3, filter?: RayFilter): ClosestRayResult;
   /** Flat closest hit: [fraction, normalX, normalY, normalZ, shapeUserData, triangleIndex]. */
   castRayClosestExcludingBody(origin: Vec3, translation: Vec3, excludedBodyUserData: number): [] | [number, number, number, number, number, number];
+  /** Reused flat view with the same fields; fraction is -1 on a miss. */
+  castRayClosestExcludingBodyValues(originX: number, originY: number, originZ: number, translationX: number, translationY: number, translationZ: number, excludedBodyUserData: number): Float64Array;
   castRay(origin: Vec3, translation: Vec3, filter?: RayFilter): RayHit[];
   explode(options: ExplosionOptions): void;
   getBodyEvents(): BodyMoveEvent[];

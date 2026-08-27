@@ -189,6 +189,11 @@ test('castRayClosest hits the nearest included shape', () => {
   assert.equal(bareWithoutBodyA.length, 6);
   assert.equal(bareWithoutBodyA[4], shapeB.getUserData());
   assert.ok(bareWithoutBodyA[0] > result.fraction);
+  const bufferedWithoutBodyA = world.castRayClosestExcludingBodyValues(-5, 0, 0, 20, 0, 0, bodyA.getUserData());
+  assert.equal(bufferedWithoutBodyA.length, 6);
+  assert.equal(bufferedWithoutBodyA[4], shapeB.getUserData());
+  assert.ok(bufferedWithoutBodyA[0] > result.fraction);
+  assert.equal(world.castRayClosestExcludingBodyValues(-5, 10, 0, 20, 0, 0, bodyA.getUserData())[0], -1);
 
   const miss = world.castRayClosest({ x: -5, y: 10, z: 0 }, { x: 20, y: 0, z: 0 }, undefined);
   assert.equal(miss.hit, false);
@@ -455,6 +460,12 @@ test('body motion snapshots and impulse batches match individual operations', ()
   assert.deepEqual(state.worldInverseRotationalInertia, batched.getWorldInverseRotationalInertia());
   assert.ok(Math.abs(state.inverseMass - (1 / batched.getMass())) < 1e-6);
   assert.equal(state.gravityScale, 0.75);
+  const bufferedState = batched.getMotionStateBuffer();
+  assert.equal(bufferedState.length, 27);
+  assert.deepEqual([...bufferedState.slice(0, 3)], [state.position.x, state.position.y, state.position.z]);
+  assert.deepEqual([...bufferedState.slice(7, 10)], [state.linearVelocity.x, state.linearVelocity.y, state.linearVelocity.z]);
+  assert.ok(Math.abs(bufferedState[25] - state.inverseMass) < 1e-6);
+  assert.equal(bufferedState[26], state.gravityScale);
   for (const axis of ['x', 'y', 'z']) {
     assert.ok(Math.abs(state.linearVelocity[axis] - individual.getLinearVelocity()[axis]) < 1e-6);
     assert.ok(Math.abs(state.angularVelocity[axis] - individual.getAngularVelocity()[axis]) < 1e-6);
@@ -462,6 +473,9 @@ test('body motion snapshots and impulse batches match individual operations', ()
   batched.setVelocities({ x: 3, y: 2, z: 1 }, { x: -1, y: -2, z: -3 });
   assert.deepEqual(batched.getLinearVelocity(), { x: 3, y: 2, z: 1 });
   assert.deepEqual(batched.getAngularVelocity(), { x: -1, y: -2, z: -3 });
+  batched.setVelocitiesValues(-3, -2, -1, 1, 2, 3);
+  assert.deepEqual(batched.getLinearVelocity(), { x: -3, y: -2, z: -1 });
+  assert.deepEqual(batched.getAngularVelocity(), { x: 1, y: 2, z: 3 });
 
   world.destroy();
   world.delete();

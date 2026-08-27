@@ -45,7 +45,9 @@ async function exerciseDeclarations() {
   });
   const velocity: Vec3 = body.getWorldPointVelocity({ x: 1, y: 0, z: 0 });
   const motionState: BodyMotionState = body.getMotionState();
+  const motionStateBuffer: Float32Array = body.getMotionStateBuffer();
   body.setVelocities({ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+  body.setVelocitiesValues(1, 0, 0, 0, 1, 0);
   body.applyImpulseBatch([1, 0, 0, 1, 0, 0], [0, 1, 0], true);
   const inertia: Matrix3 = body.getWorldInverseRotationalInertia();
   const contacts: ContactData[] = body.getContactData();
@@ -74,11 +76,12 @@ async function exerciseDeclarations() {
     { x: 0, y: -20, z: 0 },
     2,
   );
+  const bufferedClosestRay: Float64Array = world.castRayClosestExcludingBodyValues(0, 10, 0, 0, -20, 0, 2);
 
   const standard = await StandardBox3D();
   const deluxe = await DeluxeBox3D();
   const iso = await IsoBox3D();
-  return { bareClosestRay, boxContact, closest, closestRay, contacts, containsPoint, deluxe, hits, inertia, iso, motionState, standard, velocity };
+  return { bareClosestRay, boxContact, bufferedClosestRay, closest, closestRay, contacts, containsPoint, deluxe, hits, inertia, iso, motionState, motionStateBuffer, standard, velocity };
 }
 
 void exerciseDeclarations;
