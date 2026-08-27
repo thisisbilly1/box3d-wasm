@@ -392,6 +392,16 @@ struct Shape
 		b3Shape_SetDensity( id, density, updateBodyMass );
 	}
 
+	val computeMassData() const
+	{
+		b3MassData massData = b3Shape_ComputeMassData( id );
+		val o = val::object();
+		o.set( "mass", massData.mass );
+		o.set( "center", fromVec3( massData.center ) );
+		o.set( "inertia", fromMatrix3( massData.inertia ) );
+		return o;
+	}
+
 	bool isSensor() const
 	{
 		return b3Shape_IsSensor( id );
@@ -2383,6 +2393,7 @@ EMSCRIPTEN_BINDINGS( box3d )
 		.function( "setRestitution", &Shape::setRestitution )
 		.function( "getDensity", &Shape::getDensity )
 		.function( "setDensity", &Shape::setDensity )
+		.function( "computeMassData", &Shape::computeMassData )
 		.function( "isSensor", &Shape::isSensor )
 		.function( "enableSensorEvents", &Shape::enableSensorEvents )
 		.function( "enableContactEvents", &Shape::enableContactEvents )

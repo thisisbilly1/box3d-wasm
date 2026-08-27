@@ -190,6 +190,12 @@ export interface EmbindHandle {
   delete(): void;
 }
 
+export interface ShapeMassData {
+  mass: number;
+  center: Vec3;
+  inertia: Matrix3;
+}
+
 export interface Shape extends EmbindHandle {
   isValid(): boolean;
   destroy(updateBodyMass: boolean): void;
@@ -202,6 +208,7 @@ export interface Shape extends EmbindHandle {
   setRestitution(restitution: number): void;
   getDensity(): number;
   setDensity(density: number, updateBodyMass: boolean): void;
+  computeMassData(): ShapeMassData;
   isSensor(): boolean;
   enableSensorEvents(flag: boolean): void;
   enableContactEvents(flag: boolean): void;

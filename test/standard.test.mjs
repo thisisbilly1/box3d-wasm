@@ -39,8 +39,15 @@ test('dynamic box falls onto static ground and settles', () => {
   ground.createBox({ halfExtents: { x: 20, y: 0.5, z: 20 } });
 
   const box = world.createBody({ type: 'dynamic', position: { x: 0, y: 5, z: 0 } });
-  box.createBox({ halfExtents: { x: 0.5, y: 0.5, z: 0.5 }, density: 1 });
+  const boxShape = box.createBox({ halfExtents: { x: 0.5, y: 0.5, z: 0.5 }, density: 1 });
   assert.ok(Math.abs(box.getMass() - 1) < 1e-5);
+  const unitMass = boxShape.computeMassData();
+  assert.ok(Math.abs(unitMass.mass - 1) < 1e-5);
+  assert.deepEqual(unitMass.center, { x: 0, y: 0, z: 0 });
+  assert.ok(Math.abs(unitMass.inertia.cx.x - (1 / 6)) < 1e-5);
+  boxShape.setDensity(3, true);
+  assert.ok(Math.abs(boxShape.computeMassData().mass - 3) < 1e-5);
+  assert.ok(Math.abs(box.getMass() - 3) < 1e-5);
 
   stepSeconds(world, 4);
 

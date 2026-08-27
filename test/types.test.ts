@@ -30,7 +30,11 @@ async function exerciseDeclarations() {
   terrain.createMesh(meshOptions);
 
   const body = world.createBody({ type: 'dynamic', userData: 2 });
-  body.createBox({ halfExtents: { x: 1, y: 1, z: 1 }, density: 1 });
+  const box = body.createBox({ halfExtents: { x: 1, y: 1, z: 1 }, density: 1 });
+  const massData = box.computeMassData();
+  void massData.mass;
+  void massData.center.x;
+  void massData.inertia.cx.x;
   const velocity: Vec3 = body.getWorldPointVelocity({ x: 1, y: 0, z: 0 });
   const inertia: Matrix3 = body.getWorldInverseRotationalInertia();
   const contacts: ContactData[] = body.getContactData();
