@@ -1,0 +1,54 @@
+diff --git a/src/timer.c b/src/timer.c
+index 826b149..1db5eb9 100644
+--- a/src/timer.c
++++ b/src/timer.c
+@@ -229,6 +229,40 @@ void b3JoinThread( b3Thread* t )
+ #include <sched.h>
+ #include <time.h>
+ 
++#if defined( B3_NO_PROFILE_TIMERS )
++
++// WebAssembly has no clock instruction, so clock_gettime is a call out of the module and into the
++// host -- under emscripten it lands on JavaScript's performance.now(). The profile timers call it
++// per solver stage per substep, which measured ~860 crossings per world step and ~52,000 per
++// second in a 13-bot match: about 4-6% of that server's entire per-match CPU, spent producing a
++// b3Profile the host never reads.
++//
++// Every b3GetTicks/b3GetMilliseconds consumer in the library either accumulates into
++// world->profile / b3TaskContext::profile or drives a "CCD stall" b3Log. No simulation state,
++// branch, or solver result depends on a timer value, so returning zero changes what the profile
++// reports and nothing else.
++//
++// The cost of this build option: b3World_GetProfile returns zeros, and the CCD stall warnings in
++// solver.c and shape.c can no longer fire.
++uint64_t b3GetTicks( void )
++{
++	return 0;
++}
++
++float b3GetMilliseconds( uint64_t ticks )
++{
++	(void)ticks;
++	return 0.0f;
++}
++
++float b3GetMillisecondsAndReset( uint64_t* ticks )
++{
++	(void)ticks;
++	return 0.0f;
++}
++
++#else
++
+ uint64_t b3GetTicks( void )
+ {
+ 	struct timespec ts;
+@@ -250,6 +284,8 @@ float b3GetMillisecondsAndReset( uint64_t* ticks )
+ 	return ms;
+ }
+ 
++#endif
++
+ void b3Yield( void )
+ {
+ 	sched_yield();
