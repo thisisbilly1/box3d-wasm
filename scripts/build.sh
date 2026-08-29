@@ -62,7 +62,11 @@ for FLAVOUR in $FLAVOURS; do
   esac
 
   echo "==> cmake ($FLAVOUR, $TARGET_TYPE)"
-  CFLAGS="${FLAVOUR_FLAGS[*]:-}" "${EMCMAKE[@]}" cmake \
+  # Box3D's b3Profile timers call clock_gettime per solver stage per substep, and under wasm that
+  # is a crossing into the host's performance.now() -- measured ~52,000 calls a second, several
+  # percent of a busy server's CPU, for a profile no caller reads. b3World_GetProfile reports
+  # zeros in these builds and the CCD stall warnings cannot fire; nothing else changes.
+  CFLAGS="${FLAVOUR_FLAGS[*]:-} -DB3_NO_PROFILE_TIMERS" "${EMCMAKE[@]}" cmake \
     -S "$BOX3D_SRC" \
     -B "$CMAKE_BUILD_DIR" \
     -DCMAKE_BUILD_TYPE="$TARGET_TYPE" \
@@ -115,8 +119,10 @@ for FLAVOUR in $FLAVOURS; do
       ;;
   esac
 
-  echo "==> emcc link ($FLAVOUR) -> dist/$BASENAME.mjs"
-  emcc "$ROOT/csrc/glue.cpp" "$ROOT/csrc/flat.cpp" "$LIB" \
+  # em++, not emcc: the glue is C++ and current emscripten no longer infers that from the input
+  # extensions, so an emcc link leaves operator new/delete and the rest of libc++ undefined.
+  echo "==> em++ link ($FLAVOUR) -> dist/$BASENAME.mjs"
+  em++ "$ROOT/csrc/glue.cpp" "$ROOT/csrc/flat.cpp" "$LIB" \
     -I "$BOX3D_SRC/include" \
     "${EMCC_OPTS[@]}" \
     "${FLAVOUR_FLAGS[@]:-}" \
