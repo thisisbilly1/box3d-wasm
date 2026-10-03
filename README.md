@@ -209,6 +209,12 @@ npm run build        # builds standard and deluxe flavours into dist/
 npm test
 ```
 
+The supported convex-edge patch rejects only separated edge axes outside the
+two incident face-normal bounds when an accepted neighboring face supplies
+support. Physical seam, wall, boundary and ridge fixtures run in `npm test` for
+both builds. After building, `npm run test:native:contact` also checks the native
+helper's overlap, touching, roundoff, adjacency and degenerate-normal guards.
+
 This maintained fork tracks release-built `dist/` artifacts so consumers can
 pin an immutable Git commit and receive the matching JavaScript and WASM files
 without requiring Emscripten during installation.

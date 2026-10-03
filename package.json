@@ -39,6 +39,7 @@
     "build": "bash scripts/build.sh",
     "build:debug": "TARGET_TYPE=Debug bash scripts/build.sh",
     "test": "node --test \"test/*.test.mjs\" && npm run test:types",
+    "test:native:contact": "bash scripts/test-contact-guards.sh",
     "test:types": "tsc --noEmit -p test/tsconfig.json",
     "prepublishOnly": "npm test",
     "lint": "eslint .",

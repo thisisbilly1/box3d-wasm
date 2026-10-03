@@ -11,6 +11,7 @@ REPO="$(cd "$ROOT" && node -p "JSON.parse(require('fs').readFileSync('scripts/ve
 DEST="$ROOT/deps/box3d"
 PATCHES=(
   "$ROOT/patches/box3d-flat-patch-ghost-contact.patch"
+  "$ROOT/patches/box3d-supported-convex-edge-ghost.patch"
   "$ROOT/patches/box3d-no-profile-timers.patch"
 )
 

@@ -1,0 +1,79 @@
+diff --git a/src/mesh_contact.c b/src/mesh_contact.c
+index c10128ed..9cee787d 100644
+--- a/src/mesh_contact.c
++++ b/src/mesh_contact.c
+@@ -10,6 +10,7 @@
+ #include "box3d/types.h"
+ 
+ #include <stdio.h>
++#include <float.h>
+ 
+ // This guards against excessive memory usage and complex collision
+ #define B3_MAX_MESH_CONTACT_TRIANGLES 256
+@@ -240,6 +241,55 @@ static inline bool b3TrianglesShareEdge( int a1, int a2, int a3, int b1, int b2,
+ }
+ #endif
+ 
++// An isolated triangle has edge normals that do not belong to a welded surface.
++// Reject only speculative convex-edge axes outside both incident face bounds,
++// when an accepted neighboring triangle-face manifold supplies surface support.
++// Concave transitions, overlapping points, boundary edges and sharp ridge axes
++// within the incident normal cone retain their existing collision response.
++static bool b3IsSupportedConvexEdgeGhost( const b3LocalManifold* m, b3LocalManifold* const* accepted, int count )
++{
++	if ( m->pointCount <= 0 ) return false;
++	int vertex1, vertex2, edgeBit;
++	switch ( m->feature )
++	{
++		case b3_featureEdge1:
++			vertex1 = m->i1; vertex2 = m->i2; edgeBit = b3_concaveEdge1;
++			break;
++		case b3_featureEdge2:
++			vertex1 = m->i2; vertex2 = m->i3; edgeBit = b3_concaveEdge2;
++			break;
++		case b3_featureEdge3:
++			vertex1 = m->i3; vertex2 = m->i1; edgeBit = b3_concaveEdge3;
++			break;
++		default:
++			return false;
++	}
++
++	if ( ( m->triangleFlags & edgeBit ) != 0 || ( m->triangleFlags & ( edgeBit << 4 ) ) == 0 ) return false;
++	for ( int p = 0; p < m->pointCount; ++p )
++	{
++		if ( !( m->points[p].separation > 0.0f ) ) return false;
++	}
++
++	float currentCos = b3Dot( m->normal, m->triangleNormal );
++	const float roundoff = 8.0f * FLT_EPSILON;
++	for ( int j = 0; j < count; ++j )
++	{
++		const b3LocalManifold* a = accepted[j];
++		if ( a->feature != b3_featureTriangleFace || a->triangleIndex == m->triangleIndex ) continue;
++		bool hasVertex1 = a->i1 == vertex1 || a->i2 == vertex1 || a->i3 == vertex1;
++		bool hasVertex2 = a->i1 == vertex2 || a->i2 == vertex2 || a->i3 == vertex2;
++		if ( !hasVertex1 || !hasVertex2 ) continue;
++
++		float coneCos = b3Dot( m->triangleNormal, a->triangleNormal );
++		if ( coneCos > 0.0f && currentCos + roundoff < coneCos && b3Dot( m->normal, a->triangleNormal ) + roundoff < coneCos )
++		{
++			return true;
++		}
++	}
++	return false;
++}
++
+ #define B3_MAX_VERTEX_COUNT 64
+ 
+ typedef struct b3FoundVertices
+@@ -805,6 +855,10 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
+ 		{
+ 			b3LocalManifold* m = tentativeManifolds[i];
+ 			int triangleFlags = m->triangleFlags;
++			if ( b3IsSupportedConvexEdgeGhost( m, acceptedManifolds, acceptedManifoldCount ) )
++			{
++				continue;
++			}
+ 
+ 			if ( ( triangleFlags & b3_allFlatEdges ) == b3_allFlatEdges )
+ 			{
